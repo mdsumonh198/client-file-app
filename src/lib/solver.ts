@@ -355,8 +355,8 @@ export async function optimizeWithConstraintGeneration(
     violationsCount: 0,
     activeConstraints: activeResults.length,
     totalCombinations: allResults.length,
-    stepName: 'প্রাথমিক সিড কনস্ট্রেইন্ট তৈরি',
-    status: `${activeResults.length} টি প্রাথমিক ড্র সিড নিয়ে মাস্টার প্রবলেম প্রস্তুত করা হয়েছে। সলভার শুরু হচ্ছে...`,
+    stepName: 'Initialization',
+    status: `Seeding initial constraints across ${allResults.length.toLocaleString()} draws...`,
     engine: usedEngine,
   });
 
@@ -403,8 +403,8 @@ export async function optimizeWithConstraintGeneration(
       violationsCount: 0,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
-      stepName: 'মাস্টার প্রবলেম অপ্টিমাইজেশন (HiGHS MILP)',
-      status: `রাউন্ড ${round}: ${constraintRows.length} টি ড্র শর্তের জন্য সর্বনিম্ন টিকিট সংখ্যা খোঁজা হচ্ছে...`,
+      stepName: 'Optimization',
+      status: `Round ${round}: Solving master problem with ${constraintRows.length} constraints...`,
       engine: usedEngine,
     });
 
@@ -442,8 +442,8 @@ export async function optimizeWithConstraintGeneration(
       violationsCount: 0,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
-      stepName: '১০০% ড্র স্পেস ভেরিফিকেশন (64-bit SWAR Popcount)',
-      status: `রাউন্ড ${round}: বর্তমান সমাধান (${currentTickets.length} টিকিট) দিয়ে সব ${allResults.length.toLocaleString()} টি ড্র টেস্ট করা হচ্ছে...`,
+      stepName: 'Verification',
+      status: `Round ${round}: Verifying 100% draw space (${allResults.length.toLocaleString()} draws) with ${currentTickets.length} tickets...`,
       engine: usedEngine,
     });
 
@@ -516,8 +516,8 @@ export async function optimizeWithConstraintGeneration(
       deficit: deepestDeficit,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
-      stepName: 'ডিপেস্ট কাটিং-প্লেন ইনজেকশন',
-      status: `রাউন্ড ${round}: ${violations.length} টি ড্র-তে উইন কম হয়েছে। ${newlyAdded} টি নতুন কাট যুক্ত হয়েছে (বর্তমান প্রাপ্ত টিকিট: ${currentTickets.length} টি)।`,
+      stepName: 'Separation Oracle',
+      status: `Round ${round}: Added ${newlyAdded} cuts (${currentTickets.length} tickets found so far)...`,
       engine: usedEngine,
     });
 

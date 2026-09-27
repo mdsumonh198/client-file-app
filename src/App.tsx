@@ -22,16 +22,7 @@ import {
   Layers,
   Ticket,
   RefreshCw,
-  Terminal,
-  HelpCircle,
 } from 'lucide-react';
-
-interface LogEntry {
-  id: number;
-  time: string;
-  text: string;
-  step: string;
-}
 
 export const App: React.FC = () => {
   const [config, setConfig] = useState<GameConfig>({
@@ -48,7 +39,6 @@ export const App: React.FC = () => {
   const [progressStatus, setProgressStatus] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [liveInfo, setLiveInfo] = useState<SolverProgressInfo | null>(null);
-  const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -99,7 +89,6 @@ export const App: React.FC = () => {
     setProgressPercent(0);
     setResult(null);
     setLiveInfo(null);
-    setRecentLogs([]);
     setActiveDrawnResult([]);
     setErrorMsg(null);
   };
@@ -124,7 +113,7 @@ export const App: React.FC = () => {
       optimizerControllerRef.current.stop();
     }
     stopRequestedRef.current = true;
-    setProgressStatus('বর্তমান প্রাপ্ত সেরা টিকিটগুলো সংগ্রহ করা হচ্ছে...');
+    setProgressStatus('Finalizing best tickets found so far...');
   };
 
   const handleStartOptimization = async () => {
@@ -138,8 +127,7 @@ export const App: React.FC = () => {
     setIsSolving(true);
     setProgressPercent(10);
     setLiveInfo(null);
-    setRecentLogs([]);
-    setProgressStatus('Web Worker ব্যাকগ্রাউন্ড থ্রেড শুরু হচ্ছে...');
+    setProgressStatus('Starting optimization engine...');
 
     try {
       const controller = runOptimizationWithWorker({
@@ -158,23 +146,6 @@ export const App: React.FC = () => {
           // Dynamic progress estimate based on rounds
           const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
           setProgressPercent(pct);
-
-          const now = new Date();
-          const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-          setRecentLogs((prev) => {
-            // Avoid duplicate identical text at the top
-            if (prev.length > 0 && prev[0].text === info.status) {
-              return prev;
-            }
-            const entry: LogEntry = {
-              id: Date.now() + Math.random(),
-              time: timeStr,
-              text: info.status,
-              step: info.stepName,
-            };
-            return [entry, ...prev].slice(0, 6);
-          });
         },
       });
 
@@ -204,7 +175,6 @@ export const App: React.FC = () => {
     setActiveDrawnResult([]);
     setProgressPercent(0);
     setLiveInfo(null);
-    setRecentLogs([]);
   };
 
   const maxK = Math.min(config.ticketSize, config.resultSize);
@@ -358,11 +328,11 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Live Computation Dashboard (User Feedback & Real-time Metrics) */}
+        {/* Sleek Minimal Loading Dashboard */}
         {isSolving && (
           <div className="bg-slate-900/95 border-2 border-cyan-500/50 rounded-2xl p-5 shadow-2xl shadow-cyan-950/50 space-y-4 animate-in fade-in">
-            {/* Header: Live Indicator, Current Step, Elapsed Timer, and Stop/Reset Buttons */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            {/* Top Bar: Indicator, Elapsed Time, and Action Buttons */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-3">
                 <div className="relative flex items-center justify-center">
                   <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-cyan-400 opacity-75"></span>
@@ -372,62 +342,57 @@ export const App: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-extrabold text-white flex items-center gap-1.5">
                       <Zap className="w-4 h-4 text-cyan-400 fill-cyan-400" />
-                      সলভার লাইভ কাজ করছে (Web Worker Background Thread)
+                      Optimizing Tickets
                     </span>
                     <span className="text-[10px] font-mono font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-2.5 py-0.5 rounded-full uppercase">
-                      {liveInfo?.stepName || 'অডিট ও অপ্টিমাইজেশন চলছে'}
+                      {liveInfo?.stepName || 'Running'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-emerald-400/90 mt-0.5 font-medium flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
-                    ক্যালকুলেশন ব্যাকগ্রাউন্ড থ্রেডে চলছে — ব্রাউজার বা UI কখনোই ফ্রিজ বা হ্যাং হবে না।
-                  </p>
                 </div>
               </div>
 
               {/* Live Timer, Stop, and Cancel Buttons */}
-              <div className="flex flex-wrap items-center gap-2.5 self-end md:self-auto">
+              <div className="flex flex-wrap items-center gap-2.5 self-end sm:self-auto">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-amber-300 shadow-inner">
                   <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                  <span>সময়:</span>
+                  <span>Time:</span>
                   <span className="font-bold">{formatElapsed(elapsedSec)}</span>
                 </div>
 
                 <button
                   type="button"
                   onClick={handleStopOptimization}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
-                  title="এখনই থামিয়ে বর্তমান পাওয়া সেরা টিকিটগুলো দেখতে ক্লিক করুন"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                  title="Stop optimization and view the best tickets found so far"
                 >
                   <Square className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  <span>থামিয়ে এই টিকিটগুলো নিন (Stop)</span>
+                  <span>Stop &amp; Keep Best</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleCancelAndReset}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
-                  title="সম্পূর্ণ বাতিল ও রিসেট করুন"
+                  title="Cancel and reset"
                 >
                   <RotateCcw className="w-3 h-3" />
-                  <span>বাতিল / রিসেট</span>
+                  <span>Cancel</span>
                 </button>
               </div>
             </div>
 
-            {/* 4 Live Metrics Cards */}
+            {/* 4 Clean Metric Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {/* Metric 1: Current Best Tickets */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>বর্তমান সর্বনিম্ন টিকিট</span>
+                  <span>Current Tickets</span>
                   <Ticket className="w-4 h-4 text-cyan-400" />
                 </div>
                 <div className="mt-1">
                   <div className="flex items-baseline gap-2">
                     <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
-                      {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : 'হিসাব হচ্ছে...'}
-                      {liveInfo?.currentTickets ? <span className="text-xs font-normal text-slate-400 ml-1">টি</span> : null}
+                      {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : '...'}
                     </span>
                     {liveInfo?.currentTicketList && liveInfo.currentTicketList.length > 0 && (
                       <button
@@ -435,12 +400,12 @@ export const App: React.FC = () => {
                         onClick={() => setShowLiveTicketsPreview(!showLiveTicketsPreview)}
                         className="text-[10px] text-cyan-400 hover:text-cyan-200 underline font-semibold cursor-pointer"
                       >
-                        {showLiveTicketsPreview ? 'প্রিভিউ লুকান' : 'টিকিট দেখুন'}
+                        {showLiveTicketsPreview ? 'Hide' : 'View'}
                       </button>
                     )}
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
-                    টার্গেট পূরণে প্রাপ্ত টিকিট
+                    Best found so far
                   </span>
                 </div>
               </div>
@@ -448,7 +413,7 @@ export const App: React.FC = () => {
               {/* Metric 2: Current Round */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>অপ্টিমাইজেশন রাউন্ড</span>
+                  <span>Round</span>
                   <Layers className="w-4 h-4 text-indigo-400" />
                 </div>
                 <div className="mt-1">
@@ -459,7 +424,7 @@ export const App: React.FC = () => {
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
-                    HiGHS কাটিং-প্লেন চক্র
+                    Cutting-plane iteration
                   </span>
                 </div>
               </div>
@@ -467,17 +432,17 @@ export const App: React.FC = () => {
               {/* Metric 3: Combination Draw Space Scanned */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>মোট ড্র স্ক্যান হচ্ছে</span>
+                  <span>Draws Audited</span>
                   <Cpu className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1">
                   <div className="text-lg sm:text-xl font-black text-emerald-300 font-mono truncate">
                     {liveInfo?.totalCombinations
                       ? liveInfo.totalCombinations.toLocaleString()
-                      : 'গণনা হচ্ছে...'}
+                      : '...'}
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
-                    ১০০% ড্র অডিট (SWAR)
+                    100% combination space
                   </span>
                 </div>
               </div>
@@ -485,16 +450,15 @@ export const App: React.FC = () => {
               {/* Metric 4: Uncovered Violations */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>আনকাভার্ড ড্র বাকি</span>
+                  <span>Remaining Deficit</span>
                   <Activity className="w-4 h-4 text-rose-400" />
                 </div>
                 <div className="mt-1">
                   <div className="text-xl sm:text-2xl font-black text-rose-300 font-mono">
                     {liveInfo?.violationsCount !== undefined ? `${liveInfo.violationsCount}` : '...'}
-                    <span className="text-xs font-normal text-slate-400 ml-1">টি</span>
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
-                    নতুন কাট দিয়ে সমাধান হচ্ছে
+                    Draws pending coverage
                   </span>
                 </div>
               </div>
@@ -507,7 +471,7 @@ export const App: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <Ticket className="w-4 h-4 text-cyan-400" />
                     <span className="font-bold text-slate-200">
-                      লাইভ জেনারেট হওয়া টিকিট ({liveInfo.currentTicketList.length} টি পাওয়া গেছে):
+                      Generated Tickets Preview ({liveInfo.currentTicketList.length} tickets):
                     </span>
                   </div>
                   <button
@@ -515,7 +479,7 @@ export const App: React.FC = () => {
                     onClick={() => setShowLiveTicketsPreview(false)}
                     className="text-xs text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-900 border border-slate-700 cursor-pointer"
                   >
-                    বন্ধ করুন &times;
+                    Close &times;
                   </button>
                 </div>
 
@@ -542,12 +506,12 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Dynamic Progress Bar */}
-            <div className="space-y-1.5">
+            {/* Dynamic Loading Progress Bar */}
+            <div className="space-y-2 pt-1">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                <span className="text-slate-300 font-medium flex items-center gap-2">
                   <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                  <span className="text-slate-200 font-bold">{progressStatus || 'প্রক্রিয়াধীন...'}</span>
+                  <span className="text-slate-200 font-semibold">{progressStatus || 'Optimizing...'}</span>
                 </span>
                 <span className="font-mono font-bold text-cyan-300 text-sm">{progressPercent}%</span>
               </div>
@@ -558,55 +522,6 @@ export const App: React.FC = () => {
                   style={{ width: `${progressPercent}%` }}
                 >
                   <div className="absolute inset-0 bg-white/20 animate-[pulse_1s_infinite]"></div>
-                </div>
-              </div>
-            </div>
-
-            {/* Live Activity Stream Terminal & User Explainer */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-1">
-              {/* Terminal Logs (Last 5 events) */}
-              <div className="md:col-span-8 bg-slate-950 p-3 rounded-xl border border-slate-800/90 font-mono text-xs space-y-2">
-                <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800 text-slate-400">
-                  <span className="flex items-center gap-1.5 text-slate-300 font-semibold">
-                    <Terminal className="w-3.5 h-3.5 text-indigo-400" />
-                    লাইভ অ্যাক্টিভিটি স্ট্রিম (Real-time Solver Logs):
-                  </span>
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                    সক্রিয়
-                  </span>
-                </div>
-
-                <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                  {recentLogs.length === 0 ? (
-                    <div className="text-slate-500 text-[11px] py-1">
-                      সলভার ইনিশিয়ালাইজ হচ্ছে... অনুগ্রহ করে কয়েক সেকেন্ড অপেক্ষা করুন।
-                    </div>
-                  ) : (
-                    recentLogs.map((log) => (
-                      <div key={log.id} className="flex items-start gap-2 text-[11px] text-slate-300 leading-relaxed">
-                        <span className="text-slate-500 shrink-0 select-none">[{log.time}]</span>
-                        <span className="text-cyan-400 font-bold shrink-0">[{log.step}]</span>
-                        <span className="text-slate-200">{log.text}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Bengali Plain Explainer Box */}
-              <div className="md:col-span-4 bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3.5 text-xs flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center gap-1.5 text-indigo-300 font-bold mb-1.5">
-                    <HelpCircle className="w-4 h-4 text-indigo-400" />
-                    <span>সহজ ভাষায় কী হচ্ছে?</span>
-                  </div>
-                  <p className="text-[11px] text-slate-300 leading-relaxed">
-                    সিস্টেম আপনার টার্গেট পূরণের জন্য <span className="text-cyan-300 font-semibold">সব সম্ভাব্য ড্র স্ক্যান করছে</span>। যেসব ড্র-তে উইন কম পড়ার ঝুঁকি থাকে, সেগুলোর জন্য নতুন কাটিং-প্লেন যোগ করে টিকিটের সংখ্যা ছাঁটাই করছে—যাতে সর্বনিম্ন খরচে <span className="text-emerald-300 font-semibold">১০০% গ্যারান্টিযুক্ত</span> সমাধান পাওয়া যায়।
-                  </p>
-                </div>
-                <div className="mt-2 pt-2 border-t border-indigo-500/20 text-[10px] text-indigo-300/80">
-                  অপেক্ষা করতে না চাইলে উপরে <span className="text-rose-300 font-bold">"থামিয়ে বর্তমান টিকিট নিন"</span> চাপুন।
                 </div>
               </div>
             </div>
