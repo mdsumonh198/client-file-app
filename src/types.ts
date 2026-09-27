@@ -17,6 +17,8 @@ export type SolverStatus =
 
 export interface ExactMatchStat {
   k: number;
+  label?: string;
+  isGuaranteeRow?: boolean;
   min: number;
   max: number;
   avg: number;
@@ -34,6 +36,8 @@ export interface VerificationReport {
   totalPassDraws: number;
   totalFailDraws: number;
   passRatePct: number;
+  primaryGuaranteeStat?: ExactMatchStat;
+  guaranteeStats?: ExactMatchStat[];
   stats: Record<number, ExactMatchStat>;
   allTargetsPass: boolean;
   worstCaseOverallResult?: number[];

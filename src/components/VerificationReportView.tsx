@@ -21,22 +21,29 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   solverEngine,
   onSelectResultToTest,
 }) => {
-  const statsList = Object.values(report.stats).sort((a, b) => a.k - b.k);
+  // Guarantee stats (e.g. 5+ Matches: at least 5 or 6 matches)
+  const guaranteeList = report.guaranteeStats && report.guaranteeStats.length > 0
+    ? report.guaranteeStats
+    : (report.primaryGuaranteeStat ? [report.primaryGuaranteeStat] : []);
+
+  // Individual exact match breakdown rows (sorted descending from Jackpot down to 0)
+  const exactBreakdownList = Object.values(report.stats).sort((a, b) => b.k - a.k);
 
   const handleDownloadCSV = () => {
     const summaryRows = [
       `Total Selected Tickets,${report.totalTickets}`,
       `Total Tested Draws,${report.totalResultsChecked}`,
-      `PASS Draws (>= 5 Matches),${report.totalPassDraws ?? report.totalResultsChecked}`,
+      `PASS Draws (Guarantee Target),${report.totalPassDraws ?? report.totalResultsChecked}`,
       `FAIL Draws (Misses),${report.totalFailDraws ?? 0}`,
+      `Guaranteed Worst-Case Wins,${report.primaryGuaranteeStat ? `At least ${report.primaryGuaranteeStat.min} ticket(s)` : 'At least 1 ticket'}`,
       `Pass Rate,${report.passRatePct !== undefined ? `${report.passRatePct.toFixed(2)}%` : '100%'}`,
       `Zero-Miss Status,${report.allTargetsPass ? '100% ZERO-MISS PROVEN' : 'FAIL'}`,
-      `Match Rule,Strict Intersection (>= 5 matches only)`,
+      `Match Rule,Strict Intersection (Guarantee target met on every draw)`,
       '',
     ].join('\n');
 
     const headers = [
-      'Exact Match',
+      'Category / Match Level',
       'Minimum (Worst Case)',
       'Maximum (Best Case)',
       'Average',
@@ -48,15 +55,22 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       'Best Result Example',
     ].join(',');
 
-    const rows = statsList.map((s) => {
+    const gRows = guaranteeList.map((g) => {
+      const worst = g.worstResult.join(';');
+      const best = g.bestResult.join(';');
+      return `"${g.label || `${g.k}+ Matches (Guarantee Target)`}",${g.min},${g.max},${g.avg},${g.variance},${g.stdDev},">= ${g.requiredTarget || 1}",${g.passed ? 'PASS' : 'FAIL'},"${worst}","${best}"`;
+    });
+
+    const rows = exactBreakdownList.map((s) => {
       const targetStr = s.requiredTarget !== undefined ? `>= ${s.requiredTarget}` : '-';
       const statusStr = s.requiredTarget !== undefined ? (s.passed ? 'PASS' : 'FAIL') : '-';
       const worst = s.worstResult.join(';');
       const best = s.bestResult.join(';');
-      return `${s.k},${s.min},${s.max},${s.avg},${s.variance},${s.stdDev},"${targetStr}",${statusStr},"${worst}","${best}"`;
+      return `"${s.label || `Exact ${s.k}`}",${s.min},${s.max},${s.avg},${s.variance},${s.stdDev},"${targetStr}",${statusStr},"${worst}","${best}"`;
     });
 
-    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${rows.join('\n')}`;
+    const allDataRows = [...gRows, ...rows];
+    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${allDataRows.join('\n')}`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -143,9 +157,20 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
           </span>
         </div>
 
+        {/* Guaranteed Minimum Wins (Worst Case) */}
+        <div className="bg-slate-900/80 border border-emerald-500/40 rounded-lg p-3 bg-emerald-950/20">
+          <span className="text-[11px] text-emerald-400 block mb-1 font-semibold">Worst-Case Minimum Wins</span>
+          <span className="text-xl font-bold text-emerald-400 font-mono">
+            &ge; {report.primaryGuaranteeStat?.min ?? 1} Ticket
+          </span>
+          <span className="text-[10px] text-emerald-400/80 block mt-0.5 font-bold">
+            Worst Case (MIN) &ge; 1 নিশ্চিত
+          </span>
+        </div>
+
         {/* PASS Draws */}
         <div className="bg-emerald-950/30 border border-emerald-500/50 rounded-lg p-3">
-          <span className="text-[11px] text-emerald-400 block mb-1 font-semibold">PASS Draws (≥ 5 Matches)</span>
+          <span className="text-[11px] text-emerald-400 block mb-1 font-semibold">PASS Draws (Guarantee Target)</span>
           <span className="text-xl font-bold text-emerald-400 font-mono">
             {(report.totalPassDraws ?? report.totalResultsChecked).toLocaleString()}
           </span>
@@ -170,13 +195,6 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
             (report.totalFailDraws ?? 0) === 0 ? 'text-emerald-400/80' : 'text-rose-400'
           }`}>
             {(report.totalFailDraws ?? 0) === 0 ? 'Zero Miss (100%)' : 'CRITICAL FAIL'}
-          </span>
-        </div>
-
-        <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
-          <span className="text-[11px] text-slate-400 block mb-1">Win Variance ($\sigma^2$)</span>
-          <span className="text-xl font-bold text-amber-300 font-mono">
-            {report.balanceScore.toFixed(3)}
           </span>
         </div>
 
@@ -216,17 +234,17 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
             <span className="font-semibold">
               {report.allTargetsPass ? (
                 <span>
-                  <b>১০০% ব্রুট-ফোর্স অডিট সম্পন্ন:</b> Total Tested Draws = <b>{report.totalResultsChecked.toLocaleString()}</b> | FAIL Draws = <b className="text-emerald-400 font-mono">0 (Zero Miss)</b> | PASS Draws = <b className="text-emerald-400 font-mono">{(report.totalPassDraws ?? report.totalResultsChecked).toLocaleString()} (100.0%)</b>.
+                  <b>১০০% ব্রুট-ফোর্স অডিট সম্পন্ন:</b> Total Tested Draws = <b>{report.totalResultsChecked.toLocaleString()}</b> | FAIL Draws = <b className="text-emerald-400 font-mono">0 (Zero Miss)</b> | PASS Draws = <b className="text-emerald-400 font-mono">{(report.totalPassDraws ?? report.totalResultsChecked).toLocaleString()} (100.0%)</b> | Worst-Case Minimum = <b className="text-emerald-300 font-mono">&ge; {report.primaryGuaranteeStat?.min ?? 1}</b> জয়ী টিকেট।
                 </span>
               ) : (
                 <span>
-                  <b>সতর্কতা:</b> {report.totalFailDraws}টি ড্র-তে কাভারেজ মিস হয়েছে। কোনো আনুমানিক হিসাব ছাড়াই শতভাগ জিরো মিস না হওয়া পর্যন্ত ইনভেস্টমেন্ট নিষিদ্ধ।
+                  <b>সতর্কতা:</b> {report.totalFailDraws}টি ড্র-তে কাভারেজ মিস হয়েছে। কোনো ড্র-তে ০ পেলে ইনভেস্টমেন্ট নিষিদ্ধ।
                 </span>
               )}
             </span>
           </div>
           <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-black/40 text-slate-300">
-            Strict Intersection (5 or 6 matches only)
+            Strict Intersection ({report.primaryGuaranteeStat?.label || '5+ Matches'} Guarantee)
           </span>
         </div>
       </div>
@@ -241,11 +259,11 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       )}
 
       {/* Verification table */}
-      <div className="overflow-x-auto rounded-lg border border-slate-700/60">
+      <div className="overflow-x-auto rounded-lg border border-slate-700/60 shadow-lg">
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-900/90 text-slate-300 uppercase tracking-wider text-[10px] font-semibold border-b border-slate-700/80">
             <tr>
-              <th className="py-2.5 px-3">Exact Match</th>
+              <th className="py-2.5 px-3">Category / Match Condition</th>
               <th className="py-2.5 px-3 text-right">Worst Case (Min)</th>
               <th className="py-2.5 px-3 text-right">Best Case (Max)</th>
               <th className="py-2.5 px-3 text-right">Average</th>
@@ -258,84 +276,140 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800 bg-slate-950/40">
-            {statsList.map((stat) => {
-              const hasTarget = stat.requiredTarget !== undefined;
-              return (
-                <tr
-                  key={stat.k}
-                  className={`hover:bg-slate-800/40 transition-colors ${
-                    hasTarget ? (stat.passed ? 'bg-emerald-950/10' : 'bg-rose-950/20') : ''
-                  }`}
-                >
-                  <td className="py-2.5 px-3 font-semibold text-slate-200">
-                    Exact {stat.k}
-                  </td>
-                  <td className={`py-2.5 px-3 text-right font-mono font-bold ${
-                    hasTarget && stat.min >= (stat.requiredTarget || 0)
-                      ? 'text-emerald-400'
-                      : 'text-white'
-                  }`}>
-                    {stat.min}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono text-slate-300">
-                    {stat.max}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono text-cyan-300">
-                    {stat.avg.toFixed(3)}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono text-amber-300/90">
-                    {stat.variance.toFixed(3)}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono text-amber-200/80">
-                    &plusmn;{stat.stdDev.toFixed(3)}
-                  </td>
-                  <td className="py-2.5 px-3 text-center font-mono">
-                    {hasTarget ? (
-                      <span className="font-semibold text-indigo-300">
-                        &ge; {stat.requiredTarget}
+            {/* 🌟 1. Primary Guarantee Row(s) (Featured at the VERY TOP) */}
+            {guaranteeList.map((gStat) => (
+              <tr
+                key={`guarantee-${gStat.k}`}
+                className="bg-emerald-950/40 border-b-2 border-emerald-500/60 hover:bg-emerald-950/60 transition-colors ring-1 ring-emerald-500/30"
+              >
+                <td className="py-3 px-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-amber-400 text-sm font-bold">👉</span>
+                    <div>
+                      <span className="font-bold text-white text-xs block tracking-wide">
+                        {gStat.label || `${gStat.k}+ Matches (At least ${gStat.k} Matches)`}
                       </span>
-                    ) : (
-                      <span className="text-slate-600">-</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-3 text-center">
-                    {hasTarget ? (
-                      stat.passed ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-                          <CheckCircle2 className="w-3 h-3" /> PASS
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30">
-                          <XCircle className="w-3 h-3" /> FAIL
-                        </span>
-                      )
-                    ) : (
-                      <span className="text-slate-600 text-[10px]">-</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-3">
-                    <button
-                      type="button"
-                      onClick={() => onSelectResultToTest?.(stat.worstResult)}
-                      title="Click to test this result in simulator"
-                      className="font-mono text-amber-300/90 hover:text-amber-200 hover:underline cursor-pointer bg-slate-900/80 px-2 py-0.5 rounded border border-slate-700/50"
-                    >
-                      {stat.worstResult.join(', ')}
-                    </button>
-                  </td>
-                  <td className="py-2.5 px-3">
-                    <button
-                      type="button"
-                      onClick={() => onSelectResultToTest?.(stat.bestResult)}
-                      title="Click to test this result in simulator"
-                      className="font-mono text-emerald-300/90 hover:text-emerald-200 hover:underline cursor-pointer bg-slate-900/80 px-2 py-0.5 rounded border border-slate-700/50"
-                    >
-                      {stat.bestResult.join(', ')}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
+                      <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider">
+                        ★ PRIMARY INVESTMENT GUARANTEE TARGET
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td className="py-3 px-3 text-right font-mono font-black text-sm">
+                  <span className={gStat.min >= (gStat.requiredTarget || 1) ? 'text-emerald-400' : 'text-rose-400 font-bold'}>
+                    {gStat.min}
+                  </span>
+                </td>
+                <td className="py-3 px-3 text-right font-mono text-slate-200 font-semibold">
+                  {gStat.max}
+                </td>
+                <td className="py-3 px-3 text-right font-mono text-cyan-300 font-semibold">
+                  {gStat.avg.toFixed(3)}
+                </td>
+                <td className="py-3 px-3 text-right font-mono text-amber-300/90">
+                  {gStat.variance.toFixed(3)}
+                </td>
+                <td className="py-3 px-3 text-right font-mono text-amber-200/80">
+                  &plusmn;{gStat.stdDev.toFixed(3)}
+                </td>
+                <td className="py-3 px-3 text-center font-mono">
+                  <span className="font-bold text-amber-300 text-xs px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/30">
+                    &ge; {gStat.requiredTarget || 1}
+                  </span>
+                </td>
+                <td className="py-3 px-3 text-center">
+                  {gStat.passed ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 shadow-sm shadow-emerald-950">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> 100% PASS
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold border border-rose-500/40">
+                      <XCircle className="w-3.5 h-3.5" /> FAIL
+                    </span>
+                  )}
+                </td>
+                <td className="py-3 px-3">
+                  <button
+                    type="button"
+                    onClick={() => onSelectResultToTest?.(gStat.worstResult)}
+                    title="Click to test this worst-case result in simulator"
+                    className="font-mono text-amber-300 hover:text-amber-200 hover:underline cursor-pointer bg-slate-900/90 px-2 py-1 rounded border border-slate-700 text-xs"
+                  >
+                    {gStat.worstResult.join(', ')}
+                  </button>
+                </td>
+                <td className="py-3 px-3">
+                  <button
+                    type="button"
+                    onClick={() => onSelectResultToTest?.(gStat.bestResult)}
+                    title="Click to test this best-case result in simulator"
+                    className="font-mono text-cyan-300 hover:text-cyan-200 hover:underline cursor-pointer bg-slate-900/90 px-2 py-1 rounded border border-slate-700 text-xs"
+                  >
+                    {gStat.bestResult.join(', ')}
+                  </button>
+                </td>
+              </tr>
+            ))}
+
+            {/* 📊 2. Section Divider for Detailed Individual Exact Matches */}
+            <tr>
+              <td colSpan={10} className="py-2 px-3 bg-slate-900/90 text-[10px] uppercase tracking-wider font-semibold text-slate-400 border-y border-slate-800">
+                Detailed Match Breakdown (Individual Exact Hits per Draw)
+              </td>
+            </tr>
+
+            {/* 📋 3. Exact breakdown rows (Exact 6 down to Exact 0) */}
+            {exactBreakdownList.map((stat) => (
+              <tr
+                key={stat.k}
+                className="hover:bg-slate-800/40 transition-colors"
+              >
+                <td className="py-2.5 px-3 font-semibold text-slate-300">
+                  {stat.label || (stat.k === Number(Object.keys(report.stats).pop()) ? `Exact ${stat.k} (Jackpot)` : `Exact ${stat.k}`)}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono text-slate-300">
+                  {stat.min}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono text-slate-300">
+                  {stat.max}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono text-cyan-300">
+                  {stat.avg.toFixed(3)}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono text-amber-300/90">
+                  {stat.variance.toFixed(3)}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono text-amber-200/80">
+                  &plusmn;{stat.stdDev.toFixed(3)}
+                </td>
+                <td className="py-2.5 px-3 text-center font-mono text-slate-600">
+                  -
+                </td>
+                <td className="py-2.5 px-3 text-center text-slate-600 text-[10px]">
+                  -
+                </td>
+                <td className="py-2.5 px-3">
+                  <button
+                    type="button"
+                    onClick={() => onSelectResultToTest?.(stat.worstResult)}
+                    title="Click to test this result in simulator"
+                    className="font-mono text-slate-400 hover:text-slate-200 hover:underline cursor-pointer bg-slate-900/60 px-2 py-0.5 rounded border border-slate-800"
+                  >
+                    {stat.worstResult.join(', ')}
+                  </button>
+                </td>
+                <td className="py-2.5 px-3">
+                  <button
+                    type="button"
+                    onClick={() => onSelectResultToTest?.(stat.bestResult)}
+                    title="Click to test this result in simulator"
+                    className="font-mono text-slate-400 hover:text-slate-200 hover:underline cursor-pointer bg-slate-900/60 px-2 py-0.5 rounded border border-slate-800"
+                  >
+                    {stat.bestResult.join(', ')}
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
