@@ -423,24 +423,44 @@ export const App: React.FC = () => {
           <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row items-center gap-3">
             {isSolving ? (
               <div className="w-full flex flex-col sm:flex-row items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleStopOptimization}
-                  className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shadow-lg shadow-amber-500/30 hover:shadow-amber-500/40 transition-all text-sm cursor-pointer"
-                >
-                  <Square className="w-4 h-4 fill-slate-950" />
-                  <span>
-                    থামিয়ে বর্তমান {liveInfo?.currentTickets ? `${liveInfo.currentTickets} টি` : ''} টিকিট নিন (Stop & Get Best)
-                  </span>
-                </button>
+                {/* Live Progress Banner with Complete % */}
+                <div className="relative w-full sm:flex-1 overflow-hidden rounded-xl bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-500/50 py-3 px-5 shadow-lg flex items-center justify-between">
+                  {/* Background animated progress bar */}
+                  <div
+                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500/30 via-teal-500/30 to-emerald-500/30 transition-all duration-500 pointer-events-none"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                  <div className="relative z-10 flex items-center gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-100 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-emerald-400 fill-emerald-400" />
+                      অপ্টিমাইজেশন চলছে... (টার্গেট পূরণ হলে নিজে থামবে)
+                    </span>
+                  </div>
+                  <div className="relative z-10 flex items-center gap-2">
+                    <span className="text-xs sm:text-sm font-mono font-black text-emerald-400 bg-emerald-950/90 border border-emerald-500/50 px-3 py-1 rounded-lg shadow-inner">
+                      {progressPercent}% Complete
+                    </span>
+                    {liveInfo?.currentTickets && liveInfo.currentTickets > 0 ? (
+                      <button
+                        type="button"
+                        onClick={handleStopOptimization}
+                        className="text-[11px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 px-2.5 py-1 rounded-lg cursor-pointer transition-colors font-semibold whitespace-nowrap"
+                        title="প্রয়োজন হলে এখনই থামিয়ে বর্তমান টিকিট নিতে পারেন"
+                      >
+                        এখনই নিন ({liveInfo.currentTickets})
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
 
                 <button
                   type="button"
                   onClick={handleCancelAndReset}
-                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-200 hover:text-white border border-rose-500/40 text-xs font-bold cursor-pointer transition-colors shadow-md"
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-200 hover:text-white border border-rose-500/40 text-xs font-bold cursor-pointer transition-colors shadow-md whitespace-nowrap"
                 >
                   <RotateCcw className="w-4 h-4" />
-                  <span>রিসেট / বাতিল (Cancel)</span>
+                  <span>বাতিল (Cancel)</span>
                 </button>
               </div>
             ) : (
@@ -505,11 +525,11 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleStopOptimization}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
-                  title="Stop optimization and view the best tickets found so far"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 hover:text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
+                  title="টার্গেট পূরণ হওয়ার আগেই বর্তমান টিকিট নিয়ে নিতে চাইলে থামান"
                 >
-                  <Square className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  <span>Stop &amp; Keep Best</span>
+                  <Square className="w-3 h-3 fill-amber-400 text-amber-400" />
+                  <span>এখনই ফলাফল নিন</span>
                 </button>
 
                 <button

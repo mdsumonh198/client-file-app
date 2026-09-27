@@ -40,7 +40,7 @@ export const GameConfigForm: React.FC<GameConfigFormProps> = ({
               Universal Game Matrix
             </h2>
             <p className="text-[11px] text-slate-400">
-              Customizable dynamic universe range (0..40) and draw geometry
+              Customizable dynamic universe range (0..60) and draw geometry
             </p>
           </div>
         </div>
@@ -89,7 +89,7 @@ export const GameConfigForm: React.FC<GameConfigFormProps> = ({
             <input
               type="number"
               min={0}
-              max={40}
+              max={60}
               value={config.numberFrom}
               onChange={(e) => handleChange('numberFrom', parseInt(e.target.value, 10) || 0)}
               disabled={disabled}
@@ -123,7 +123,7 @@ export const GameConfigForm: React.FC<GameConfigFormProps> = ({
             <input
               type="number"
               min={0}
-              max={40}
+              max={60}
               value={config.numberTo}
               onChange={(e) => handleChange('numberTo', parseInt(e.target.value, 10) || 0)}
               disabled={disabled}
@@ -131,8 +131,8 @@ export const GameConfigForm: React.FC<GameConfigFormProps> = ({
             />
             <button
               type="button"
-              disabled={disabled || config.numberTo >= 40}
-              onClick={() => handleChange('numberTo', Math.min(40, config.numberTo + 1))}
+              disabled={disabled || config.numberTo >= 60}
+              onClick={() => handleChange('numberTo', Math.min(60, config.numberTo + 1))}
               className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-r-lg border border-l-0 border-slate-700 text-xs font-bold disabled:opacity-40 cursor-pointer"
             >
               +

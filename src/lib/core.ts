@@ -88,10 +88,10 @@ export function validateGame(
     !Number.isInteger(numberFrom) ||
     !Number.isInteger(numberTo) ||
     numberFrom < 0 ||
-    numberTo > 40 ||
+    numberTo > 60 ||
     numberFrom > numberTo
   ) {
-    throw new Error('Number range must satisfy 0 <= Number From <= Number To <= 40');
+    throw new Error('Number range must satisfy 0 <= Number From <= Number To <= 60');
   }
   const poolSize = numberTo - numberFrom + 1;
   if (!Number.isInteger(ticketSize) || ticketSize < 1 || ticketSize > poolSize) {
