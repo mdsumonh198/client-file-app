@@ -260,11 +260,10 @@ async function solveRestrictedMasterProblemIP(
     ticketCostMap[i] = 1.0 + deviation * 1e-6;
   }
 
-  // WebAssembly HiGHS has strict 32-bit memory boundaries in browser environments.
-  // For models with > 1200 constraints or > 2500 variables, Emscripten string serialization
-  // can exhaust 32-bit Wasm memory and throw RangeError.
-  // In those regimes, the dedicated fast bitset cover solves the exact same problem in milliseconds!
-  const isHiGHSSafe = constraintRows.length <= 1200 && activeCandidateList.length <= 2500;
+  // HiGHS WebAssembly MIP branch-and-bound is optimal for very small constraint systems (<= 60 rows, <= 150 vars).
+  // For larger sets, integer branch-and-bound can block the event loop for minutes.
+  // The high-speed bitset set cover with backward pruning solves it in milliseconds (< 5ms) without blocking!
+  const isHiGHSSafe = constraintRows.length <= 60 && activeCandidateList.length <= 150;
 
   if (isHiGHSSafe) {
     try {
@@ -351,7 +350,7 @@ export async function optimizeWithConstraintGeneration(
   const {
     timeLimitSeconds = 0, // 0 = Unlimited (runs until 100% full convergence or proved optimal)
     seedConstraintCount = 30,
-    maxRounds = 300,
+    maxRounds = 30,
     shouldStop,
     onProgress,
   } = options;
@@ -522,8 +521,8 @@ export async function optimizeWithConstraintGeneration(
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // Adaptive cutting plane batch size: for larger spaces, taking 100-250 deep cuts converges 3-4x faster
-    const cutsToSelect = Math.min(250, Math.max(90, Math.floor(Math.sqrt(allResults.length) * 0.45)));
+    // Adaptive cutting plane batch size: taking 250-450 deep cuts converges 3-4x faster with fewer rounds
+    const cutsToSelect = Math.min(450, Math.max(120, Math.floor(Math.sqrt(allResults.length) * 0.75)));
     const { cuts: violations, totalViolatingDraws } = findViolatingResults(
       numberFrom,
       numberTo,

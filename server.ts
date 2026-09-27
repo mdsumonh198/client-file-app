@@ -110,9 +110,11 @@ async function startServer() {
     res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx / Cloudflare proxy buffering
     res.flushHeaders();
 
-    // Defeat reverse-proxy stream buffering (Cloud Run, Nginx, Cloudflare) with initial 2KB comment padding
-    res.write(':' + ' '.repeat(2048) + '\n\n');
-    (res as any).flush?.();
+    req.socket.setNoDelay(true);
+    res.socket?.setNoDelay(true);
+
+    // Defeat reverse-proxy stream buffering (Cloud Run, Nginx, Cloudflare) with 8KB comment padding
+    res.write(':' + ' '.repeat(8192) + '\n\n');
 
     const currentSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     let stopRequested = false;

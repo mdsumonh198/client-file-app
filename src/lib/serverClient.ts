@@ -93,6 +93,51 @@ export function runOptimizationWithServer(params: {
   let isDone = false;
 
   const promise = new Promise<OptimizationResult>(async (resolve, reject) => {
+    let pollInterval: any = null;
+
+    const cleanupAndResolve = (result: OptimizationResult) => {
+      if (!isDone) {
+        isDone = true;
+        if (pollInterval) clearInterval(pollInterval);
+        resolve(result);
+      }
+    };
+
+    const cleanupAndReject = (err: any) => {
+      if (!isDone) {
+        isDone = true;
+        if (pollInterval) clearInterval(pollInterval);
+        reject(err);
+      }
+    };
+
+    // Concurrent heartbeat polling every 450ms.
+    // Guarantees real-time progress even if proxy buffers the SSE response body!
+    pollInterval = setInterval(async () => {
+      if (isDone || abortController.signal.aborted) {
+        clearInterval(pollInterval);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/optimize/session/${sessionId}`, { signal: abortController.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.lastProgress && !isDone) {
+            onProgress?.(data.lastProgress);
+          }
+          if (data.status === 'completed' && data.result) {
+            cleanupAndResolve(data.result);
+          } else if (data.status === 'error') {
+            cleanupAndReject(new Error(data.error || 'Server optimization failed'));
+          } else if (data.status === 'stopped' && data.result) {
+            cleanupAndResolve(data.result);
+          }
+        }
+      } catch {
+        // Ignore background polling network blips
+      }
+    }, 450);
+
     try {
       const response = await fetch('/api/optimize', {
         method: 'POST',
@@ -126,13 +171,11 @@ export function runOptimizationWithServer(params: {
         try {
           const parsed = JSON.parse(dataStr);
           if (currentEvent === 'progress') {
-            onProgress?.(parsed);
+            if (!isDone) onProgress?.(parsed);
           } else if (currentEvent === 'done') {
-            isDone = true;
-            resolve(parsed);
+            cleanupAndResolve(parsed);
           } else if (currentEvent === 'error') {
-            isDone = true;
-            reject(new Error(parsed.message || 'Server optimization failed'));
+            cleanupAndReject(new Error(parsed.message || 'Server optimization failed'));
           }
         } catch (parseErr) {
           console.warn('Failed to parse SSE data packet:', parseErr);

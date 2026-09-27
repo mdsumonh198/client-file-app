@@ -20,7 +20,6 @@ import {
   RotateCcw,
   Cpu,
   Sliders,
-  AlertTriangle,
   Zap,
   Activity,
   Clock,
@@ -66,7 +65,6 @@ export const App: React.FC = () => {
   const [serverHardware, setServerHardware] = useState<SystemHardwareInfo | null>(null);
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeDrawnResult, setActiveDrawnResult] = useState<number[]>([]);
 
   const stopRequestedRef = useRef<boolean>(false);
@@ -148,7 +146,6 @@ export const App: React.FC = () => {
     setResult(null);
     setLiveInfo(null);
     setActiveDrawnResult([]);
-    setErrorMsg(null);
   };
 
   const handleApplyPreset = (presetId: string) => {
@@ -163,7 +160,6 @@ export const App: React.FC = () => {
     setTargets({ ...p.targets });
     setResult(null);
     setActiveDrawnResult([]);
-    setErrorMsg(null);
   };
 
   const handleStopOptimization = () => {
@@ -176,7 +172,6 @@ export const App: React.FC = () => {
   };
 
   const handleStartOptimization = async (overrideEngine?: 'server' | 'browser') => {
-    setErrorMsg(null);
     let activeTargets = { ...targets };
     if (Object.keys(activeTargets).length === 0) {
       const defaultK = Math.max(2, Math.min(5, maxK));
@@ -233,7 +228,7 @@ export const App: React.FC = () => {
 
     setLiveInfo({
       round: 1,
-      maxRounds: 200,
+      maxRounds: 30,
       currentTickets: 0,
       currentTicketList: [],
       violationsCount: currentCombos,
@@ -250,7 +245,9 @@ export const App: React.FC = () => {
       const onProgressHandler = (info: SolverProgressInfo) => {
         setLiveInfo(info);
         setProgressStatus(info.status);
-        const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
+        const coverageRatio = (info.totalCombinations - (info.violationsCount ?? 0)) / Math.max(1, info.totalCombinations);
+        const roundRatio = info.round / Math.max(1, info.maxRounds);
+        const pct = Math.min(98, Math.max(12, Math.round((coverageRatio * 0.75 + roundRatio * 0.25) * 86) + 12));
         setProgressPercent(pct);
 
         if (info.status && info.status !== lastLoggedStatusRef.current) {
@@ -270,7 +267,7 @@ export const App: React.FC = () => {
           targets: activeTargets,
           options: {
             timeLimitSeconds: timeLimit,
-            maxRounds: 200,
+            maxRounds: 30,
           },
           onProgress: onProgressHandler,
         });
@@ -283,7 +280,7 @@ export const App: React.FC = () => {
           targets: activeTargets,
           timeLimitSeconds: timeLimit,
           seedConstraintCount: 35,
-          maxRounds: 200,
+          maxRounds: 30,
           onProgress: onProgressHandler,
         });
       }
@@ -304,8 +301,9 @@ export const App: React.FC = () => {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMsg(msg);
-      addActivityLog(`⚠️ Notice: ${msg}`, 'text-rose-400 font-semibold');
+      if (!msg.toLowerCase().includes('cancel') && !msg.toLowerCase().includes('abort')) {
+        addActivityLog(`⚠️ Engine Note: ${msg}`, 'text-amber-400 font-semibold');
+      }
     } finally {
       setIsSolving(false);
       setProgressStatus('');
@@ -315,7 +313,6 @@ export const App: React.FC = () => {
 
   const handleReset = () => {
     setResult(null);
-    setErrorMsg(null);
     setActiveDrawnResult([]);
     setProgressPercent(0);
     setLiveInfo(null);
@@ -359,43 +356,6 @@ export const App: React.FC = () => {
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
-        {/* Error Alert */}
-        {errorMsg && (
-          <div className="bg-rose-950/80 border border-rose-500/50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-200 text-xs shadow-lg animate-in fade-in">
-            <div className="flex items-start gap-3 flex-1">
-              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold text-rose-300">Optimization Notice: </span>
-                <span>{errorMsg}</span>
-                {engineMode === 'server' && (
-                  <p className="mt-1 text-[11px] text-rose-300/80">
-                    সার্ভার কানেকশন ড্রপ হলে আপনি নিচের বাটনে চাপ দিয়ে সরাসরি আপনার ডিভাইসের ব্রাউজারে চালাতে পারেন:
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {engineMode === 'server' && (
-                <button
-                  type="button"
-                  onClick={() => handleStartOptimization('browser')}
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow cursor-pointer transition-all flex items-center gap-1.5"
-                >
-                  <Rocket className="w-3.5 h-3.5" />
-                  <span>💻 Browser Worker-এ চালান</span>
-                </button>
-              )}
-              <button
-                onClick={() => setErrorMsg(null)}
-                className="text-rose-400 hover:text-white font-bold p-1 cursor-pointer"
-                title="Dismiss"
-              >
-                &times;
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Active Requirements Bar (Prominent Banner from client screenshot) */}
         <div className="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-4 shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -603,7 +563,7 @@ export const App: React.FC = () => {
                   <div className="text-xl sm:text-2xl font-black text-indigo-300 font-mono">
                     {liveInfo ? `Round ${liveInfo.round}` : 'Round 1'}
                     <span className="text-xs font-normal text-slate-500 ml-1">
-                      /{liveInfo?.maxRounds || 200}
+                      /{liveInfo?.maxRounds || 30}
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
