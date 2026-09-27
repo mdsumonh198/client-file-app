@@ -161,94 +161,146 @@ export function findViolatingResults(
   resultSize: number,
   tickets: number[][],
   targets: TargetMap,
-  maxViolationsToReturn = 100,
+  maxViolationsToReturn = 75,
   excludeIndices?: Set<number>
 ): Violation[] {
-  const ticketMasks: BitMask[] = tickets.map(toMask);
-  const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
   const targetEntries = Object.entries(targets).map(([k, min]) => ({
     k: Number(k),
     req: min,
   }));
 
-  if (targetEntries.length === 0) return [];
+  if (targetEntries.length === 0 || tickets.length === 0) return [];
 
-  const violations: Violation[] = [];
+  // Flatten ticket masks into typed arrays for maximum V8 JIT throughput
+  const tCount = tickets.length;
+  const tLo = new Int32Array(tCount);
+  const tHi = new Int32Array(tCount);
+  for (let i = 0; i < tCount; i++) {
+    const m = toMask(tickets[i]);
+    tLo[i] = m.lo;
+    tHi[i] = m.hi;
+  }
+
+  const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
   const countsPerK = new Int32Array(resultSize + 1);
 
+  // Deficit buckets: index = deficit value (e.g. 1, 2, 3...)
+  // Store up to 120 candidate result indices per bucket to completely eliminate sorting 300k items
+  const deficitBuckets: number[][] = [];
+  let maxDeficitSeen = 0;
+
   for (let rIdx = 0; rIdx < results.length; rIdx++) {
-    // If this result is already actively constrained in the master problem, skip it
     if (excludeIndices && excludeIndices.has(rIdx)) {
       continue;
     }
 
     countsPerK.fill(0);
-    const rLo = results[rIdx].mask.lo;
-    const rHi = results[rIdx].mask.hi;
+    const rLoVal = results[rIdx].mask.lo;
+    const rHiVal = results[rIdx].mask.hi;
 
-    for (let tIdx = 0; tIdx < ticketMasks.length; tIdx++) {
-      const k = swarPopcount32(ticketMasks[tIdx].lo & rLo) + swarPopcount32(ticketMasks[tIdx].hi & rHi);
+    for (let tIdx = 0; tIdx < tCount; tIdx++) {
+      const k = swarPopcount32(tLo[tIdx] & rLoVal) + swarPopcount32(tHi[tIdx] & rHiVal);
       if (k <= resultSize) {
         countsPerK[k]++;
       }
     }
 
-    let hasViolation = false;
     let totalDeficit = 0;
-    const failedTargets: { [k: number]: { actual: number; required: number } } = {};
-
     for (let i = 0; i < targetEntries.length; i++) {
       const { k, req } = targetEntries[i];
       const actual = countsPerK[k];
       if (actual < req) {
-        hasViolation = true;
-        const deficit = req - actual;
-        totalDeficit += deficit;
+        totalDeficit += (req - actual);
+      }
+    }
+
+    if (totalDeficit > 0) {
+      if (totalDeficit > maxDeficitSeen) {
+        maxDeficitSeen = totalDeficit;
+      }
+      if (!deficitBuckets[totalDeficit]) {
+        deficitBuckets[totalDeficit] = [];
+      }
+      // Keep bucket bounded so memory stays tiny
+      if (deficitBuckets[totalDeficit].length < 150) {
+        deficitBuckets[totalDeficit].push(rIdx);
+      }
+    }
+  }
+
+  if (maxDeficitSeen === 0) {
+    return [];
+  }
+
+  // Gather candidate indices from highest deficit down to lowest
+  const candidateIndices: number[] = [];
+  for (let def = maxDeficitSeen; def >= 1; def--) {
+    const bucket = deficitBuckets[def];
+    if (bucket && bucket.length > 0) {
+      for (let i = 0; i < bucket.length; i++) {
+        candidateIndices.push(bucket[i]);
+        if (candidateIndices.length >= maxViolationsToReturn * 2) {
+          break;
+        }
+      }
+    }
+    if (candidateIndices.length >= maxViolationsToReturn * 2) {
+      break;
+    }
+  }
+
+  // Build Violation objects and apply orthogonal diversification only to selected candidates
+  const selectedCuts: Violation[] = [];
+  const selectedMasks: BitMask[] = [];
+
+  for (let i = 0; i < candidateIndices.length; i++) {
+    const rIdx = candidateIndices[i];
+    const rItem = results[rIdx];
+
+    // Recompute exact counts only for these few candidates
+    countsPerK.fill(0);
+    const rLoVal = rItem.mask.lo;
+    const rHiVal = rItem.mask.hi;
+    for (let tIdx = 0; tIdx < tCount; tIdx++) {
+      const k = swarPopcount32(tLo[tIdx] & rLoVal) + swarPopcount32(tHi[tIdx] & rHiVal);
+      if (k <= resultSize) {
+        countsPerK[k]++;
+      }
+    }
+
+    const failedTargets: { [k: number]: { actual: number; required: number } } = {};
+    let totalDeficit = 0;
+    for (let j = 0; j < targetEntries.length; j++) {
+      const { k, req } = targetEntries[j];
+      const actual = countsPerK[k];
+      if (actual < req) {
+        totalDeficit += (req - actual);
         failedTargets[k] = { actual, required: req };
       }
     }
 
-    if (hasViolation) {
-      violations.push({
-        result: results[rIdx],
+    // Check diversification against existing selected cuts
+    let isTooClose = false;
+    for (let s = 0; s < selectedMasks.length; s++) {
+      const overlap = exactMatchCount(rItem.mask, selectedMasks[s]);
+      if (overlap >= resultSize - 1) {
+        isTooClose = true;
+        break;
+      }
+    }
+
+    if (!isTooClose || selectedCuts.length + (candidateIndices.length - i) <= maxViolationsToReturn) {
+      selectedCuts.push({
+        result: rItem,
         failedTargets,
         totalDeficit,
       });
-    }
-  }
-
-  // Deepest-Cut Selection: Sort all violations descending by violation depth
-  violations.sort((a, b) => b.totalDeficit - a.totalDeficit);
-
-  if (violations.length <= maxViolationsToReturn) {
-    return violations;
-  }
-
-  // Orthogonal diversification: Pick the deepest cuts that don't excessively overlap
-  const selectedCuts: Violation[] = [];
-  const selectedMasks: BitMask[] = [];
-
-  for (let i = 0; i < violations.length; i++) {
-    const cand = violations[i];
-    let isTooClose = false;
-
-    // Keep candidate if it has high depth or low overlap with already chosen cuts
-    if (selectedCuts.length < maxViolationsToReturn) {
-      for (let s = 0; s < selectedMasks.length; s++) {
-        const overlap = exactMatchCount(cand.result.mask, selectedMasks[s]);
-        // If two cuts share almost all numbers, pick another to span diverse directions
-        if (overlap >= resultSize - 1 && cand.totalDeficit <= selectedCuts[s].totalDeficit) {
-          isTooClose = true;
-          break;
-        }
-      }
-
-      if (!isTooClose || selectedCuts.length + (violations.length - i) <= maxViolationsToReturn) {
-        selectedCuts.push(cand);
-        selectedMasks.push(cand.result.mask);
+      selectedMasks.push(rItem.mask);
+      if (selectedCuts.length >= maxViolationsToReturn) {
+        break;
       }
     }
   }
 
-  return selectedCuts.slice(0, maxViolationsToReturn);
+  return selectedCuts;
 }

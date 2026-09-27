@@ -2,6 +2,7 @@ import {
   allCombinationsWithMasks,
   CombinationItem,
   exactMatchCount,
+  swarPopcount32,
   validateGame,
 } from './core';
 import { TargetMap, OptimizationResult, SolverStatus } from '../types';
@@ -12,6 +13,7 @@ export interface SolverProgressInfo {
   round: number;
   maxRounds: number;
   currentTickets: number;
+  currentTicketList?: number[][];
   violationsCount: number;
   deficit?: number;
   activeConstraints: number;
@@ -108,46 +110,30 @@ function checkMathematicalFeasibility(
  *   For every active result r_i and target k:
  *     sum_{j: exactMatch(t_j, r_i) == k} x_j >= target_k  (Priority 1: 100% guarantee)
  */
+export interface ConstraintRow {
+  rIdx: number;
+  k: number;
+  min: number;
+  ticketIndices: number[];
+}
+
 async function solveRestrictedMasterProblemIP(
   allTickets: CombinationItem[],
-  activeResults: CombinationItem[],
-  targets: TargetMap,
+  constraintRows: ConstraintRow[],
   timeBudgetSeconds: number,
   numberFrom: number,
   numberTo: number
 ): Promise<{ selectedIndices: number[]; isProvedOptimal: boolean; engine: string }> {
-  const targetEntries = Object.entries(targets).map(([k, min]) => ({
-    k: Number(k),
-    min,
-  }));
-
-  if (activeResults.length === 0 || targetEntries.length === 0) {
+  if (constraintRows.length === 0) {
     return { selectedIndices: [], isProvedOptimal: true, engine: 'trivial' };
   }
 
   // Pre-filter candidate tickets that satisfy at least one active constraint
   const candidateIndicesSet = new Set<number>();
-  const constraintRows: { rIdx: number; k: number; min: number; ticketIndices: number[] }[] = [];
-
-  for (let rIdx = 0; rIdx < activeResults.length; rIdx++) {
-    const rMask = activeResults[rIdx].mask;
-    for (const { k, min } of targetEntries) {
-      if (min <= 0) continue;
-      const matchingTickets: number[] = [];
-      for (let t = 0; t < allTickets.length; t++) {
-        if (exactMatchCount(allTickets[t].mask, rMask) === k) {
-          matchingTickets.push(t);
-          candidateIndicesSet.add(t);
-        }
-      }
-      if (matchingTickets.length > 0) {
-        constraintRows.push({
-          rIdx,
-          k,
-          min,
-          ticketIndices: matchingTickets,
-        });
-      }
+  for (let r = 0; r < constraintRows.length; r++) {
+    const tIndices = constraintRows[r].ticketIndices;
+    for (let c = 0; c < tIndices.length; c++) {
+      candidateIndicesSet.add(tIndices[c]);
     }
   }
 
@@ -339,6 +325,23 @@ export async function optimizeWithConstraintGeneration(
   const activeResults: CombinationItem[] = seedIndices.map((idx) => allResults[idx]);
   const activeSet = new Set<number>(seedIndices);
 
+  // Pre-flatten candidate ticket bitmasks into typed arrays for maximum V8 throughput
+  const tCount = allTickets.length;
+  const tLo = new Int32Array(tCount);
+  const tHi = new Int32Array(tCount);
+  for (let i = 0; i < tCount; i++) {
+    tLo[i] = allTickets[i].mask.lo;
+    tHi[i] = allTickets[i].mask.hi;
+  }
+
+  const targetEntries = Object.entries(targets).map(([k, min]) => ({
+    k: Number(k),
+    min,
+  }));
+
+  const constraintRows: ConstraintRow[] = [];
+  let processedResultCount = 0;
+
   let currentTickets: number[][] = [];
   let isProvedOptimal = false;
   let usedEngine = 'Exact MILP Solver';
@@ -348,6 +351,7 @@ export async function optimizeWithConstraintGeneration(
     round: 1,
     maxRounds,
     currentTickets: 0,
+    currentTicketList: [],
     violationsCount: 0,
     activeConstraints: activeResults.length,
     totalCombinations: allResults.length,
@@ -366,19 +370,45 @@ export async function optimizeWithConstraintGeneration(
       break;
     }
 
+    // Incrementally generate constraint rows ONLY for newly added results (blazing fast)
+    for (let r = processedResultCount; r < activeResults.length; r++) {
+      const rLo = activeResults[r].mask.lo;
+      const rHi = activeResults[r].mask.hi;
+      for (let j = 0; j < targetEntries.length; j++) {
+        const { k, min } = targetEntries[j];
+        if (min <= 0) continue;
+        const matchingTickets: number[] = [];
+        for (let t = 0; t < tCount; t++) {
+          if (swarPopcount32(tLo[t] & rLo) + swarPopcount32(tHi[t] & rHi) === k) {
+            matchingTickets.push(t);
+          }
+        }
+        if (matchingTickets.length > 0) {
+          constraintRows.push({
+            rIdx: activeResults[r].index,
+            k,
+            min,
+            ticketIndices: matchingTickets,
+          });
+        }
+      }
+    }
+    processedResultCount = activeResults.length;
+
     onProgress?.({
       round,
       maxRounds,
       currentTickets: currentTickets.length,
+      currentTicketList: currentTickets,
       violationsCount: 0,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'মাস্টার প্রবলেম অপ্টিমাইজেশন (HiGHS MILP)',
-      status: `রাউন্ড ${round}: ${activeResults.length} টি ড্র কনস্ট্রেইন্টের জন্য সর্বনিম্ন টিকিট সংখ্যা খোঁজা হচ্ছে...`,
+      status: `রাউন্ড ${round}: ${constraintRows.length} টি ড্র শর্তের জন্য সর্বনিম্ন টিকিট সংখ্যা খোঁজা হচ্ছে...`,
       engine: usedEngine,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
     const remainingBudgetSec = isUnlimitedTime
       ? 120
@@ -387,8 +417,7 @@ export async function optimizeWithConstraintGeneration(
     // Solve the Restricted Master Problem with Exact Integer Programming
     const ipResult = await solveRestrictedMasterProblemIP(
       allTickets,
-      activeResults,
-      targets,
+      constraintRows,
       remainingBudgetSec,
       numberFrom,
       numberTo
@@ -409,6 +438,7 @@ export async function optimizeWithConstraintGeneration(
       round,
       maxRounds,
       currentTickets: currentTickets.length,
+      currentTicketList: currentTickets,
       violationsCount: 0,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
@@ -417,18 +447,17 @@ export async function optimizeWithConstraintGeneration(
       engine: usedEngine,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Separation Oracle:
     // Check ticket set against 100% of all possible results using exact SWAR popcount bitmasks
-    // Pass activeSet as excludeIndices so we exclusively find violating results that are NOT YET in the cut pool!
     const violations = findViolatingResults(
       numberFrom,
       numberTo,
       resultSize,
       currentTickets,
       targets,
-      50, // Deepest cuts to select per iteration
+      75, // Deepest cuts to select per iteration
       activeSet
     );
 
@@ -482,12 +511,13 @@ export async function optimizeWithConstraintGeneration(
       round,
       maxRounds,
       currentTickets: currentTickets.length,
+      currentTicketList: currentTickets,
       violationsCount: violations.length,
       deficit: deepestDeficit,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'ডিপেস্ট কাটিং-প্লেন ইনজেকশন',
-      status: `রাউন্ড ${round}: ${violations.length} টি ড্র-তে উইন কম হয়েছে। ${newlyAdded} টি নতুন কাট মাস্টার প্রবলেমে যুক্ত করা হয়েছে (মোট অ্যাক্টিভ কাট: ${activeResults.length})।`,
+      status: `রাউন্ড ${round}: ${violations.length} টি ড্র-তে উইন কম হয়েছে। ${newlyAdded} টি নতুন কাট যুক্ত হয়েছে (বর্তমান প্রাপ্ত টিকিট: ${currentTickets.length} টি)।`,
       engine: usedEngine,
     });
 
@@ -495,8 +525,8 @@ export async function optimizeWithConstraintGeneration(
       break;
     }
 
-    // Yield to browser event loop so UI stays responsive
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Yield to browser event loop so UI stays completely responsive and interactive
+    await new Promise((resolve) => setTimeout(resolve, 35));
   }
 
   // Final exhaustive verification across 100% of all results

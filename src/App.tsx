@@ -6,7 +6,8 @@ import { TargetsMatrix } from './components/TargetsMatrix';
 import { TicketsView } from './components/TicketsView';
 import { VerificationReportView } from './components/VerificationReportView';
 import { ResultSimulator } from './components/ResultSimulator';
-import { optimizeWithConstraintGeneration, SolverProgressInfo } from './lib/solver';
+import { SolverProgressInfo } from './lib/solver';
+import { runOptimizationWithWorker, OptimizerController } from './lib/workerClient';
 import {
   ShieldCheck,
   Rocket,
@@ -84,6 +85,25 @@ export const App: React.FC = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}s`;
   };
 
+  const [showLiveTicketsPreview, setShowLiveTicketsPreview] = useState<boolean>(false);
+  const optimizerControllerRef = useRef<OptimizerController | null>(null);
+
+  const handleCancelAndReset = () => {
+    if (optimizerControllerRef.current) {
+      optimizerControllerRef.current.terminate();
+      optimizerControllerRef.current = null;
+    }
+    stopRequestedRef.current = true;
+    setIsSolving(false);
+    setProgressStatus('');
+    setProgressPercent(0);
+    setResult(null);
+    setLiveInfo(null);
+    setRecentLogs([]);
+    setActiveDrawnResult([]);
+    setErrorMsg(null);
+  };
+
   const handleApplyPreset = (presetId: string) => {
     const p = PRESETS.find((item) => item.id === presetId);
     if (!p) return;
@@ -100,6 +120,9 @@ export const App: React.FC = () => {
   };
 
   const handleStopOptimization = () => {
+    if (optimizerControllerRef.current) {
+      optimizerControllerRef.current.stop();
+    }
     stopRequestedRef.current = true;
     setProgressStatus('বর্তমান প্রাপ্ত সেরা টিকিটগুলো সংগ্রহ করা হচ্ছে...');
   };
@@ -116,49 +139,47 @@ export const App: React.FC = () => {
     setProgressPercent(10);
     setLiveInfo(null);
     setRecentLogs([]);
-    setProgressStatus('Initializing solver and generating combination candidate space...');
+    setProgressStatus('Web Worker ব্যাকগ্রাউন্ড থ্রেড শুরু হচ্ছে...');
 
     try {
-      await new Promise((r) => setTimeout(r, 60));
-
-      const optResult = await optimizeWithConstraintGeneration(
-        config.numberFrom,
-        config.numberTo,
-        config.ticketSize,
-        config.resultSize,
+      const controller = runOptimizationWithWorker({
+        numberFrom: config.numberFrom,
+        numberTo: config.numberTo,
+        ticketSize: config.ticketSize,
+        resultSize: config.resultSize,
         targets,
-        {
-          timeLimitSeconds: timeLimit,
-          seedConstraintCount: 35,
-          maxRounds: 200,
-          shouldStop: () => stopRequestedRef.current,
-          onProgress: (info) => {
-            setLiveInfo(info);
-            setProgressStatus(info.status);
+        timeLimitSeconds: timeLimit,
+        seedConstraintCount: 35,
+        maxRounds: 200,
+        onProgress: (info) => {
+          setLiveInfo(info);
+          setProgressStatus(info.status);
 
-            // Dynamic progress estimate based on rounds
-            const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
-            setProgressPercent(pct);
+          // Dynamic progress estimate based on rounds
+          const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
+          setProgressPercent(pct);
 
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-            setRecentLogs((prev) => {
-              // Avoid duplicate identical text at the top
-              if (prev.length > 0 && prev[0].text === info.status) {
-                return prev;
-              }
-              const entry: LogEntry = {
-                id: Date.now() + Math.random(),
-                time: timeStr,
-                text: info.status,
-                step: info.stepName,
-              };
-              return [entry, ...prev].slice(0, 6);
-            });
-          },
-        }
-      );
+          setRecentLogs((prev) => {
+            // Avoid duplicate identical text at the top
+            if (prev.length > 0 && prev[0].text === info.status) {
+              return prev;
+            }
+            const entry: LogEntry = {
+              id: Date.now() + Math.random(),
+              time: timeStr,
+              text: info.status,
+              step: info.stepName,
+            };
+            return [entry, ...prev].slice(0, 6);
+          });
+        },
+      });
+
+      optimizerControllerRef.current = controller;
+      const optResult = await controller.promise;
 
       setProgressPercent(100);
       setResult(optResult);
@@ -173,6 +194,7 @@ export const App: React.FC = () => {
     } finally {
       setIsSolving(false);
       setProgressStatus('');
+      optimizerControllerRef.current = null;
     }
   };
 
@@ -285,29 +307,53 @@ export const App: React.FC = () => {
 
           {/* Action Button Bar like screenshot */}
           <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row items-center gap-3">
-            <button
-              type="button"
-              onClick={handleStartOptimization}
-              disabled={isSolving || activeTargetEntries.length === 0}
-              className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Rocket className="w-4 h-4 fill-slate-950" />
-              {isSolving
-                ? 'Optimizing Combination Space...'
-                : activeTargetEntries.length === 0
-                ? 'আগে নিচে টার্গেট অ্যাড করুন'
-                : 'Calculate Minimum Tickets For Targets'}
-            </button>
+            {isSolving ? (
+              <div className="w-full flex flex-col sm:flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleStopOptimization}
+                  className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shadow-lg shadow-amber-500/30 hover:shadow-amber-500/40 transition-all text-sm cursor-pointer"
+                >
+                  <Square className="w-4 h-4 fill-slate-950" />
+                  <span>
+                    থামিয়ে বর্তমান {liveInfo?.currentTickets ? `${liveInfo.currentTickets} টি` : ''} টিকিট নিন (Stop & Get Best)
+                  </span>
+                </button>
 
-            {result && (
-              <button
-                type="button"
-                onClick={handleReset}
-                className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold cursor-pointer transition-colors"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Reset Results
-              </button>
+                <button
+                  type="button"
+                  onClick={handleCancelAndReset}
+                  className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-200 hover:text-white border border-rose-500/40 text-xs font-bold cursor-pointer transition-colors shadow-md"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>রিসেট / বাতিল (Cancel)</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleStartOptimization}
+                  disabled={activeTargetEntries.length === 0}
+                  className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <Rocket className="w-4 h-4 fill-slate-950" />
+                  {activeTargetEntries.length === 0
+                    ? 'আগে নিচে টার্গেট অ্যাড করুন'
+                    : 'Calculate Minimum Tickets For Targets'}
+                </button>
+
+                {result && (
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Reset Results
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -315,7 +361,7 @@ export const App: React.FC = () => {
         {/* Live Computation Dashboard (User Feedback & Real-time Metrics) */}
         {isSolving && (
           <div className="bg-slate-900/95 border-2 border-cyan-500/50 rounded-2xl p-5 shadow-2xl shadow-cyan-950/50 space-y-4 animate-in fade-in">
-            {/* Header: Live Indicator, Current Step, Elapsed Timer, and Stop Button */}
+            {/* Header: Live Indicator, Current Step, Elapsed Timer, and Stop/Reset Buttons */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-3">
                 <div className="relative flex items-center justify-center">
@@ -326,20 +372,21 @@ export const App: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-extrabold text-white flex items-center gap-1.5">
                       <Zap className="w-4 h-4 text-cyan-400 fill-cyan-400" />
-                      সলভার লাইভ কাজ করছে (Optimizer Computing Live)
+                      সলভার লাইভ কাজ করছে (Web Worker Background Thread)
                     </span>
                     <span className="text-[10px] font-mono font-bold text-cyan-300 bg-cyan-950/80 border border-cyan-500/40 px-2.5 py-0.5 rounded-full uppercase">
                       {liveInfo?.stepName || 'অডিট ও অপ্টিমাইজেশন চলছে'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    মেশিন সব সম্ভাব্য ড্র পরীক্ষা করে টিকিট সংখ্যা ছাঁটাই করছে...
+                  <p className="text-[11px] text-emerald-400/90 mt-0.5 font-medium flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                    ক্যালকুলেশন ব্যাকগ্রাউন্ড থ্রেডে চলছে — ব্রাউজার বা UI কখনোই ফ্রিজ বা হ্যাং হবে না।
                   </p>
                 </div>
               </div>
 
-              {/* Live Timer and Stop Button */}
-              <div className="flex items-center gap-3 self-end md:self-auto">
+              {/* Live Timer, Stop, and Cancel Buttons */}
+              <div className="flex flex-wrap items-center gap-2.5 self-end md:self-auto">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs text-amber-300 shadow-inner">
                   <Clock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                   <span>সময়:</span>
@@ -349,11 +396,21 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleStopOptimization}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-500/50 text-rose-200 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer hover:shadow-rose-900/40"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-200 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
                   title="এখনই থামিয়ে বর্তমান পাওয়া সেরা টিকিটগুলো দেখতে ক্লিক করুন"
                 >
-                  <Square className="w-3.5 h-3.5 fill-rose-400 text-rose-400" />
-                  <span>থামিয়ে বর্তমান টিকিট নিন (Stop)</span>
+                  <Square className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                  <span>থামিয়ে এই টিকিটগুলো নিন (Stop)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCancelAndReset}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 hover:text-white text-xs font-bold transition-all shadow-md cursor-pointer"
+                  title="সম্পূর্ণ বাতিল ও রিসেট করুন"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>বাতিল / রিসেট</span>
                 </button>
               </div>
             </div>
@@ -367,9 +424,20 @@ export const App: React.FC = () => {
                   <Ticket className="w-4 h-4 text-cyan-400" />
                 </div>
                 <div className="mt-1">
-                  <div className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
-                    {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : 'হিসাব হচ্ছে...'}
-                    {liveInfo?.currentTickets ? <span className="text-xs font-normal text-slate-400 ml-1">টি</span> : null}
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
+                      {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : 'হিসাব হচ্ছে...'}
+                      {liveInfo?.currentTickets ? <span className="text-xs font-normal text-slate-400 ml-1">টি</span> : null}
+                    </span>
+                    {liveInfo?.currentTicketList && liveInfo.currentTicketList.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowLiveTicketsPreview(!showLiveTicketsPreview)}
+                        className="text-[10px] text-cyan-400 hover:text-cyan-200 underline font-semibold cursor-pointer"
+                      >
+                        {showLiveTicketsPreview ? 'প্রিভিউ লুকান' : 'টিকিট দেখুন'}
+                      </button>
+                    )}
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
                     টার্গেট পূরণে প্রাপ্ত টিকিট
@@ -431,6 +499,48 @@ export const App: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Live Tickets Preview Drawer (collapsible) */}
+            {showLiveTicketsPreview && liveInfo?.currentTicketList && liveInfo.currentTicketList.length > 0 && (
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-cyan-500/40 space-y-2.5 shadow-inner animate-in fade-in">
+                <div className="flex items-center justify-between text-xs pb-1.5 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Ticket className="w-4 h-4 text-cyan-400" />
+                    <span className="font-bold text-slate-200">
+                      লাইভ জেনারেট হওয়া টিকিট ({liveInfo.currentTicketList.length} টি পাওয়া গেছে):
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowLiveTicketsPreview(false)}
+                    className="text-xs text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-900 border border-slate-700 cursor-pointer"
+                  >
+                    বন্ধ করুন &times;
+                  </button>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pr-1">
+                  {liveInfo.currentTicketList.map((ticketNums, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-slate-900/90 border border-slate-800/80 rounded-lg p-2 flex items-center justify-between text-xs"
+                    >
+                      <span className="text-[10px] font-mono text-slate-500">#{idx + 1}</span>
+                      <div className="flex items-center gap-1">
+                        {ticketNums.map((num) => (
+                          <span
+                            key={num}
+                            className="w-5 h-5 rounded bg-indigo-950/80 border border-indigo-500/40 text-[10px] font-bold text-cyan-300 flex items-center justify-center font-mono"
+                          >
+                            {num}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Dynamic Progress Bar */}
             <div className="space-y-1.5">
