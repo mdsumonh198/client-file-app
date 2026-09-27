@@ -54,6 +54,23 @@ export function verifyTicketSet(
     };
   }
 
+  // Pre-flatten ticket bitmasks into typed arrays for maximum V8 throughput
+  const tCount = ticketMasks.length;
+  const tLo = new Int32Array(tCount);
+  const tHi = new Int32Array(tCount);
+  for (let i = 0; i < tCount; i++) {
+    tLo[i] = ticketMasks[i].lo;
+    tHi[i] = ticketMasks[i].hi;
+  }
+
+  // Pre-flatten draw bitmasks
+  const dLo = new Int32Array(totalResults);
+  const dHi = new Int32Array(totalResults);
+  for (let i = 0; i < totalResults; i++) {
+    dLo[i] = results[i].mask.lo;
+    dHi[i] = results[i].mask.hi;
+  }
+
   // Pre-allocate tracking arrays for k = 0..resultSize
   const minCounts = new Int32Array(resultSize + 1).fill(tickets.length + 1);
   const maxCounts = new Int32Array(resultSize + 1).fill(-1);
@@ -65,14 +82,14 @@ export function verifyTicketSet(
   // Scratch array for match count per k for current result
   const countsPerK = new Int32Array(resultSize + 1);
 
-  // Exhaustive loop over 100% of all results using exact SWAR popcount
+  // Exhaustive loop over 100% of all results using exact SWAR popcount on fast typed arrays
   for (let rIdx = 0; rIdx < totalResults; rIdx++) {
     countsPerK.fill(0);
-    const rLo = results[rIdx].mask.lo;
-    const rHi = results[rIdx].mask.hi;
+    const rLo = dLo[rIdx];
+    const rHi = dHi[rIdx];
 
-    for (let tIdx = 0; tIdx < ticketMasks.length; tIdx++) {
-      const k = swarPopcount32(ticketMasks[tIdx].lo & rLo) + swarPopcount32(ticketMasks[tIdx].hi & rHi);
+    for (let tIdx = 0; tIdx < tCount; tIdx++) {
+      const k = swarPopcount32(tLo[tIdx] & rLo) + swarPopcount32(tHi[tIdx] & rHi);
       if (k <= resultSize) {
         countsPerK[k]++;
       }
@@ -314,3 +331,134 @@ export function findViolatingResults(
 
   return { cuts: selectedCuts, totalViolatingDraws };
 }
+
+/**
+ * Async version of verifyTicketSet that periodically yields to the event loop.
+ * Guarantees zero blocking of Express or Web Worker threads during exhaustive 100% verification.
+ */
+export async function verifyTicketSetAsync(
+  numberFrom: number,
+  numberTo: number,
+  resultSize: number,
+  tickets: number[][],
+  targets: TargetMap = {},
+  onProgress?: (audited: number, total: number) => void
+): Promise<VerificationReport> {
+  const ticketMasks: BitMask[] = tickets.map(toMask);
+  const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
+  const totalResults = results.length;
+
+  if (totalResults === 0 || tickets.length === 0) {
+    return verifyTicketSet(numberFrom, numberTo, resultSize, tickets, targets);
+  }
+
+  const tCount = ticketMasks.length;
+  const tLo = new Int32Array(tCount);
+  const tHi = new Int32Array(tCount);
+  for (let i = 0; i < tCount; i++) {
+    tLo[i] = ticketMasks[i].lo;
+    tHi[i] = ticketMasks[i].hi;
+  }
+
+  const dLo = new Int32Array(totalResults);
+  const dHi = new Int32Array(totalResults);
+  for (let i = 0; i < totalResults; i++) {
+    dLo[i] = results[i].mask.lo;
+    dHi[i] = results[i].mask.hi;
+  }
+
+  const minCounts = new Int32Array(resultSize + 1).fill(tickets.length + 1);
+  const maxCounts = new Int32Array(resultSize + 1).fill(-1);
+  const sumCounts = new Float64Array(resultSize + 1);
+  const sumSqCounts = new Float64Array(resultSize + 1);
+  const worstResultIdx = new Int32Array(resultSize + 1).fill(0);
+  const bestResultIdx = new Int32Array(resultSize + 1).fill(0);
+  const countsPerK = new Int32Array(resultSize + 1);
+
+  const yieldBatch = 20000;
+  for (let rIdx = 0; rIdx < totalResults; rIdx++) {
+    if (rIdx > 0 && rIdx % yieldBatch === 0) {
+      onProgress?.(rIdx, totalResults);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    countsPerK.fill(0);
+    const rLo = dLo[rIdx];
+    const rHi = dHi[rIdx];
+
+    for (let tIdx = 0; tIdx < tCount; tIdx++) {
+      const k = swarPopcount32(tLo[tIdx] & rLo) + swarPopcount32(tHi[tIdx] & rHi);
+      if (k <= resultSize) {
+        countsPerK[k]++;
+      }
+    }
+
+    for (let k = 0; k <= resultSize; k++) {
+      const c = countsPerK[k];
+      sumCounts[k] += c;
+      sumSqCounts[k] += c * c;
+
+      if (c < minCounts[k]) {
+        minCounts[k] = c;
+        worstResultIdx[k] = rIdx;
+      }
+      if (c > maxCounts[k]) {
+        maxCounts[k] = c;
+        bestResultIdx[k] = rIdx;
+      }
+    }
+  }
+
+  const stats: Record<number, ExactMatchStat> = {};
+  let allTargetsPass = true;
+  let targetVarianceSum = 0;
+  let targetCount = 0;
+
+  for (let k = 0; k <= resultSize; k++) {
+    const minVal = minCounts[k] === tickets.length + 1 ? 0 : minCounts[k];
+    const maxVal = maxCounts[k] === -1 ? 0 : maxCounts[k];
+    const avgVal = sumCounts[k] / totalResults;
+    const variance = Math.max(0, (sumSqCounts[k] / totalResults) - (avgVal * avgVal));
+    const stdDev = Math.sqrt(variance);
+
+    const req = targets[k];
+    const passed = req === undefined ? true : minVal >= req;
+
+    if (!passed) {
+      allTargetsPass = false;
+    }
+
+    if (req !== undefined) {
+      targetVarianceSum += variance;
+      targetCount++;
+    }
+
+    stats[k] = {
+      k,
+      min: minVal,
+      max: maxVal,
+      avg: Number(avgVal.toFixed(4)),
+      variance: Number(variance.toFixed(4)),
+      stdDev: Number(stdDev.toFixed(4)),
+      worstResult: results[worstResultIdx[k]].nums,
+      bestResult: results[bestResultIdx[k]].nums,
+      requiredTarget: req,
+      passed,
+    };
+  }
+
+  const balanceScore = targetCount > 0 ? Number((targetVarianceSum / targetCount).toFixed(4)) : 0;
+  const requestedKeys = Object.keys(targets).map(Number).sort((a, b) => b - a);
+  const primaryK = requestedKeys.length > 0 ? requestedKeys[0] : Math.min(resultSize, 3);
+
+  return {
+    totalTickets: tickets.length,
+    totalResultsChecked: totalResults,
+    stats,
+    allTargetsPass,
+    worstCaseOverallResult: results[worstResultIdx[primaryK]]?.nums || results[0].nums,
+    bestCaseOverallResult: results[bestResultIdx[primaryK]]?.nums || results[0].nums,
+    balanceScore,
+  };
+}
+

@@ -222,18 +222,18 @@ export const App: React.FC = () => {
       {
         id: 'init_4',
         timestamp: nowTimeStr,
-        message: `🔄 Round 1: Seeding initial cutting constraints & generating matrix...`,
-        color: 'text-slate-300',
+        message: `🚀 ফাস্ট Greedy BitSet Cover শুরু হচ্ছে: ${currentCombos.toLocaleString()}টি ড্র-এর সবকটি কভার না হওয়া এবং FAIL = 0 না হওয়া পর্যন্ত অবিরাম চলবে...`,
+        color: 'text-emerald-400 font-bold',
       },
     ]);
 
     setLiveInfo({
-      round: 1,
-      maxRounds: 30,
+      round: 0,
+      maxRounds: 0,
       currentTickets: 0,
       currentTicketList: [],
       violationsCount: currentCombos,
-      activeConstraints: 35,
+      activeConstraints: 0,
       totalCombinations: currentCombos,
       stepName: 'Initializing',
       status: initialStatus,
@@ -250,20 +250,19 @@ export const App: React.FC = () => {
         const rem = info.violationsCount ?? total;
         const covered = Math.max(0, total - rem);
         const covPct = ((covered / total) * 100).toFixed(1);
-        const roundRatio = info.round / Math.max(1, info.maxRounds);
-        const pct = Math.min(98, Math.max(12, Math.round(((covered / total) * 0.75 + roundRatio * 0.25) * 86) + 12));
+        const pct = info.violationsCount === 0 ? 100 : Math.min(99, Math.max(10, Math.round((covered / total) * 90) + 10));
         setProgressPercent(pct);
 
         if (info.status && info.status !== lastLoggedStatusRef.current) {
           lastLoggedStatusRef.current = info.status;
           let logColor = 'text-slate-300';
           if (info.stepName === 'Separation Oracle') logColor = 'text-amber-300 font-medium';
-          else if (info.stepName === 'Optimization') logColor = 'text-cyan-300';
+          else if (info.stepName === 'Optimization' || info.stepName === 'Greedy BitSet Cover') logColor = 'text-cyan-300';
           else if (info.stepName === 'Verification') logColor = 'text-emerald-300';
           else if (info.stepName === 'Initialization') logColor = 'text-indigo-300';
           
           addActivityLog(
-            `[Round ${info.round}] ${info.status} (বর্তমান টিকিট: ${info.currentTickets}টি, কভারেজ: ${covPct}%)`,
+            `${info.status} (বর্তমান টিকিট: ${info.currentTickets}টি, কভারেজ: ${covPct}%)`,
             logColor
           );
         }
@@ -275,7 +274,7 @@ export const App: React.FC = () => {
           targets: activeTargets,
           options: {
             timeLimitSeconds: timeLimit,
-            maxRounds: 30,
+            maxRounds: 0,
           },
           onProgress: onProgressHandler,
         });
@@ -288,7 +287,7 @@ export const App: React.FC = () => {
           targets: activeTargets,
           timeLimitSeconds: timeLimit,
           seedConstraintCount: 35,
-          maxRounds: 30,
+          maxRounds: 0,
           onProgress: onProgressHandler,
         });
       }
@@ -581,21 +580,18 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Metric 2: Current Round */}
+              {/* Metric 2: Coverage Status */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>Round</span>
+                  <span>কভারেজ স্ট্যাটাস</span>
                   <Layers className="w-4 h-4 text-indigo-400" />
                 </div>
                 <div className="mt-1">
                   <div className="text-xl sm:text-2xl font-black text-indigo-300 font-mono">
-                    {liveInfo ? `Round ${liveInfo.round}` : 'Round 1'}
-                    <span className="text-xs font-normal text-slate-500 ml-1">
-                      /{liveInfo?.maxRounds || 30}
-                    </span>
+                    {liveInfo?.violationsCount === 0 ? 'FAIL = 0' : `বাকি ${liveInfo?.violationsCount ? liveInfo.violationsCount.toLocaleString() : '...'} টি`}
                   </div>
-                  <span className="text-[10px] text-slate-500 block truncate">
-                    Cutting-plane iteration
+                  <span className="text-[10px] text-emerald-400 font-semibold block truncate">
+                    {liveInfo?.violationsCount === 0 ? '✓ ১০০% ড্র কভার সম্পন্ন' : 'Greedy BitSet Cover লুপ'}
                   </span>
                 </div>
               </div>

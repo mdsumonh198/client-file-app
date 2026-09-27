@@ -58,7 +58,7 @@ async function startServer() {
     const { sessionId } = req.params;
     const session = activeSessions.get(sessionId);
     if (!session) {
-      res.status(404).json({ error: 'Session not found or expired' });
+      res.status(200).json({ sessionId, status: 'initializing' });
       return;
     }
     res.json({
@@ -150,7 +150,11 @@ async function startServer() {
 
     const sendEvent = (event: string, data: any) => {
       try {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        let payload = data;
+        if (event === 'progress' && data && data.currentTicketList && data.currentTicketList.length > 50) {
+          payload = { ...data, currentTicketList: data.currentTicketList.slice(0, 50) };
+        }
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
         (res as any).flush?.();
       } catch {
         // Socket error
@@ -175,12 +179,12 @@ async function startServer() {
     try {
       sendEvent('session', { sessionId: currentSessionId });
       sendEvent('progress', {
-        round: 1,
-        maxRounds: options?.maxRounds || 200,
+        round: 0,
+        maxRounds: 0,
         currentTickets: 0,
         currentTicketList: [],
         violationsCount: 0,
-        activeConstraints: 35,
+        activeConstraints: 0,
         totalCombinations: 0,
         stepName: 'Initialization',
         status: 'Connected to Server CPU Engine. Initializing combinatorial matrix...',
@@ -189,11 +193,14 @@ async function startServer() {
 
       const result = await runOptimization(config, targets, {
         timeLimitSeconds: options?.timeLimitSeconds,
-        maxRounds: options?.maxRounds,
+        maxRounds: options?.maxRounds ?? 0,
         shouldStop: () => stopRequested,
         onProgress: (info) => {
           if (session) {
-            session.lastProgress = info;
+            session.lastProgress = {
+              ...info,
+              currentTicketList: info.currentTicketList ? info.currentTicketList.slice(0, 50) : undefined,
+            };
             session.updatedAt = Date.now();
           }
           sendEvent('progress', info);

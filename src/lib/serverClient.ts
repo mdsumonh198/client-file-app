@@ -122,6 +122,9 @@ export function runOptimizationWithServer(params: {
         const res = await fetch(`/api/optimize/session/${sessionId}`, { signal: abortController.signal });
         if (res.ok) {
           const data = await res.json();
+          if (data.status === 'initializing') {
+            return;
+          }
           if (data.lastProgress && !isDone) {
             onProgress?.(data.lastProgress);
           }
