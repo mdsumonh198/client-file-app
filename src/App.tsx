@@ -38,7 +38,7 @@ export const App: React.FC = () => {
     resultSize: 6,
   });
 
-  const [targets, setTargets] = useState<TargetMap>({});
+  const [targets, setTargets] = useState<TargetMap>({ 5: 1 });
 
   const [timeLimit, setTimeLimit] = useState<number>(0); // 0 = No Limit (Run Until Solved / Proved)
   const [isSolving, setIsSolving] = useState<boolean>(false);
@@ -137,11 +137,18 @@ export const App: React.FC = () => {
     setProgressStatus('Finalizing best tickets found so far...');
   };
 
-  const handleStartOptimization = async () => {
+  const handleStartOptimization = async (overrideEngine?: 'server' | 'browser') => {
     setErrorMsg(null);
-    if (Object.keys(targets).length === 0) {
-      setErrorMsg('Please specify at least one compound target (e.g. Exact 5 Match >= 1).');
-      return;
+    let activeTargets = { ...targets };
+    if (Object.keys(activeTargets).length === 0) {
+      const defaultK = Math.max(2, Math.min(5, maxK));
+      activeTargets = { [defaultK]: 1 };
+      setTargets(activeTargets);
+    }
+
+    const currentEngine = overrideEngine || engineMode;
+    if (overrideEngine) {
+      setEngineMode(overrideEngine);
     }
 
     stopRequestedRef.current = false;
@@ -149,7 +156,7 @@ export const App: React.FC = () => {
     setProgressPercent(10);
     setLiveInfo(null);
     setProgressStatus(
-      engineMode === 'server'
+      currentEngine === 'server'
         ? `Connecting to Server CPU Engine (${serverHardware?.cpuCores || 'Multi'} Cores)...`
         : 'Starting Browser Web Worker...'
     );
@@ -157,10 +164,10 @@ export const App: React.FC = () => {
     try {
       let controller: { stop: () => void; terminate: () => void; promise: Promise<OptimizationResult> };
 
-      if (engineMode === 'server') {
+      if (currentEngine === 'server') {
         controller = runOptimizationWithServer({
           config,
-          targets,
+          targets: activeTargets,
           options: {
             timeLimitSeconds: timeLimit,
             maxRounds: 200,
@@ -178,7 +185,7 @@ export const App: React.FC = () => {
           numberTo: config.numberTo,
           ticketSize: config.ticketSize,
           resultSize: config.resultSize,
-          targets,
+          targets: activeTargets,
           timeLimitSeconds: timeLimit,
           seedConstraintCount: 35,
           maxRounds: 200,
@@ -257,18 +264,38 @@ export const App: React.FC = () => {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
         {/* Error Alert */}
         {errorMsg && (
-          <div className="bg-rose-950/80 border border-rose-500/50 rounded-xl p-4 flex items-start gap-3 text-rose-200 text-xs shadow-lg animate-in fade-in">
-            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <span className="font-bold text-rose-300">Optimization Notice: </span>
-              {errorMsg}
+          <div className="bg-rose-950/80 border border-rose-500/50 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-200 text-xs shadow-lg animate-in fade-in">
+            <div className="flex items-start gap-3 flex-1">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-rose-300">Optimization Notice: </span>
+                <span>{errorMsg}</span>
+                {engineMode === 'server' && (
+                  <p className="mt-1 text-[11px] text-rose-300/80">
+                    সার্ভার কানেকশন ড্রপ হলে আপনি নিচের বাটনে চাপ দিয়ে সরাসরি আপনার ডিভাইসের ব্রাউজারে চালাতে পারেন:
+                  </p>
+                )}
+              </div>
             </div>
-            <button
-              onClick={() => setErrorMsg(null)}
-              className="text-rose-400 hover:text-white font-bold ml-2 cursor-pointer"
-            >
-              &times;
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              {engineMode === 'server' && (
+                <button
+                  type="button"
+                  onClick={() => handleStartOptimization('browser')}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow cursor-pointer transition-all flex items-center gap-1.5"
+                >
+                  <Rocket className="w-3.5 h-3.5" />
+                  <span>💻 Browser Worker-এ চালান</span>
+                </button>
+              )}
+              <button
+                onClick={() => setErrorMsg(null)}
+                className="text-rose-400 hover:text-white font-bold p-1 cursor-pointer"
+                title="Dismiss"
+              >
+                &times;
+              </button>
+            </div>
           </div>
         )}
 
@@ -363,13 +390,12 @@ export const App: React.FC = () => {
               <>
                 <button
                   type="button"
-                  onClick={handleStartOptimization}
-                  disabled={activeTargetEntries.length === 0}
-                  className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  onClick={() => handleStartOptimization()}
+                  className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm cursor-pointer"
                 >
                   <Rocket className="w-4 h-4 fill-slate-950" />
                   {activeTargetEntries.length === 0
-                    ? 'আগে নিচে টার্গেট অ্যাড করুন'
+                    ? 'Calculate Minimum Tickets (Exact 5-Match ≥ 1)'
                     : 'Calculate Minimum Tickets For Targets'}
                 </button>
 

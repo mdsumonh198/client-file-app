@@ -67,6 +67,15 @@ async function startServer() {
     const currentSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     let stopRequested = false;
 
+    // Send keepalive comments every 3 seconds to prevent intermediate proxy / browser timeouts
+    const keepAliveTimer = setInterval(() => {
+      try {
+        res.write(': keepalive\n\n');
+      } catch {
+        // Connection closed
+      }
+    }, 3000);
+
     activeSessions.set(currentSessionId, {
       stop: () => {
         stopRequested = true;
@@ -74,6 +83,7 @@ async function startServer() {
     });
 
     req.on('close', () => {
+      clearInterval(keepAliveTimer);
       stopRequested = true;
       activeSessions.delete(currentSessionId);
     });
@@ -98,6 +108,7 @@ async function startServer() {
     } catch (err: any) {
       sendEvent('error', { message: err?.message || 'Server optimization encountered an error' });
     } finally {
+      clearInterval(keepAliveTimer);
       activeSessions.delete(currentSessionId);
       res.end();
     }

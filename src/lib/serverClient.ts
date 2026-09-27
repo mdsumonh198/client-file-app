@@ -61,6 +61,30 @@ export function runOptimizationWithServer(params: {
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
+      let currentEvent = 'message';
+      let currentDataLines: string[] = [];
+
+      const dispatchCurrentEvent = () => {
+        if (currentDataLines.length === 0) return;
+        const dataStr = currentDataLines.join('\n');
+        currentDataLines = [];
+
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (currentEvent === 'progress') {
+            onProgress?.(parsed);
+          } else if (currentEvent === 'done') {
+            isDone = true;
+            resolve(parsed);
+          } else if (currentEvent === 'error') {
+            isDone = true;
+            reject(new Error(parsed.message || 'Server optimization failed'));
+          }
+        } catch (parseErr) {
+          console.warn('Failed to parse SSE data packet:', parseErr);
+        }
+        currentEvent = 'message';
+      };
 
       while (true) {
         const { value, done } = await reader.read();
@@ -71,35 +95,36 @@ export function runOptimizationWithServer(params: {
         // keep uncompleted trailing line in buffer
         buffer = lines.pop() || '';
 
-        let currentEvent = 'message';
+        for (const rawLine of lines) {
+          const line = rawLine.replace(/\r$/, '');
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
+          if (line === '') {
+            // Empty line marks end of an SSE message block
+            dispatchCurrentEvent();
+            continue;
+          }
 
-          if (trimmed.startsWith('event: ')) {
-            currentEvent = trimmed.slice(7).trim();
-          } else if (trimmed.startsWith('data: ')) {
-            const dataStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(dataStr);
-              if (currentEvent === 'progress') {
-                onProgress?.(parsed);
-              } else if (currentEvent === 'done') {
-                isDone = true;
-                resolve(parsed);
-                return;
-              } else if (currentEvent === 'error') {
-                isDone = true;
-                reject(new Error(parsed.message || 'Server optimization failed'));
-                return;
-              }
-            } catch (parseErr) {
-              console.warn('Failed to parse SSE data packet:', parseErr);
-            }
+          if (line.startsWith(':')) {
+            // Comment / heartbeat keepalive line - ignore
+            continue;
+          }
+
+          if (line.startsWith('event:')) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            currentDataLines.push(line.slice(5).trim());
           }
         }
       }
+
+      // Flush any remaining buffered message
+      if (buffer.trim()) {
+        const line = buffer.replace(/\r$/, '');
+        if (line.startsWith('data:')) {
+          currentDataLines.push(line.slice(5).trim());
+        }
+      }
+      dispatchCurrentEvent();
 
       if (!isDone) {
         reject(new Error('Optimization stream ended unexpectedly without final result.'));
