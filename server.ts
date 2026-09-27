@@ -18,9 +18,76 @@ interface OptimizationSession {
   error?: string;
   updatedAt: number;
   disconnectTimer?: NodeJS.Timeout;
+  listeners: ((event: string, data: any) => void)[];
 }
 
 const activeSessions = new Map<string, OptimizationSession>();
+
+function startOptimizationTask(
+  sessionId: string,
+  config: GameConfig,
+  targets: TargetMap,
+  options?: { timeLimitSeconds?: number; maxRounds?: number }
+): OptimizationSession {
+  // Cancel any existing running sessions to avoid CPU contention
+  for (const [id, s] of activeSessions.entries()) {
+    if (s.status === 'running' && id !== sessionId) {
+      s.status = 'stopped';
+      s.stop();
+    }
+  }
+
+  let stopRequested = false;
+  const session: OptimizationSession = {
+    id: sessionId,
+    status: 'running',
+    stop: () => {
+      stopRequested = true;
+    },
+    updatedAt: Date.now(),
+    listeners: [],
+  };
+
+  activeSessions.set(sessionId, session);
+
+  const emit = (event: string, data: any) => {
+    for (const listener of session.listeners) {
+      try {
+        listener(event, data);
+      } catch {}
+    }
+  };
+
+  // Launch optimization in background
+  runOptimization(config, targets, {
+    timeLimitSeconds: options?.timeLimitSeconds,
+    maxRounds: options?.maxRounds ?? 0,
+    shouldStop: () => stopRequested,
+    onProgress: (info) => {
+      session.lastProgress = {
+        ...info,
+        currentTicketList: info.currentTicketList ? info.currentTicketList.slice(0, 50) : undefined,
+      };
+      session.updatedAt = Date.now();
+      emit('progress', info);
+    },
+  })
+    .then((result) => {
+      session.status = 'completed';
+      session.result = result;
+      session.updatedAt = Date.now();
+      emit('done', result);
+    })
+    .catch((err: any) => {
+      const errMsg = err?.message || 'Server optimization encountered an error';
+      session.status = 'error';
+      session.error = errMsg;
+      session.updatedAt = Date.now();
+      emit('error', { message: errMsg });
+    });
+
+  return session;
+}
 
 // Cleanup stale sessions older than 30 minutes
 setInterval(() => {
@@ -82,6 +149,111 @@ async function startServer() {
     } else {
       res.json({ status: 'not_found' });
     }
+  });
+
+  // Start Optimization Background Job (immediate HTTP 200 response to prevent proxy timeouts)
+  app.post('/api/optimize/start', (req: Request, res: Response) => {
+    const { config, targets, options, sessionId } = req.body as {
+      config: GameConfig;
+      targets: TargetMap;
+      options?: { timeLimitSeconds?: number; maxRounds?: number };
+      sessionId?: string;
+    };
+
+    if (!config || !targets) {
+      res.status(400).json({ error: 'Missing config or targets' });
+      return;
+    }
+
+    const currentSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    startOptimizationTask(currentSessionId, config, targets, options);
+
+    res.json({ ok: true, sessionId: currentSessionId });
+  });
+
+  // Native GET Server-Sent Events stream for any session (EventSource-compatible, proxy-proof)
+  app.get('/api/optimize/events/:sessionId', (req: Request, res: Response) => {
+    const { sessionId } = req.params;
+    const session = activeSessions.get(sessionId);
+
+    req.socket.setTimeout(0);
+    req.socket.setKeepAlive(true, 1000);
+    res.setTimeout(0);
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders();
+
+    req.socket.setNoDelay(true);
+    res.socket?.setNoDelay(true);
+
+    res.write(':' + ' '.repeat(8192) + '\n\n');
+
+    const sendEvent = (event: string, data: any) => {
+      try {
+        let payload = data;
+        if (event === 'progress' && data && data.currentTicketList && data.currentTicketList.length > 50) {
+          payload = { ...data, currentTicketList: data.currentTicketList.slice(0, 50) };
+        }
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+        (res as any).flush?.();
+      } catch {}
+    };
+
+    sendEvent('session', { sessionId });
+
+    if (!session) {
+      sendEvent('progress', {
+        round: 0,
+        maxRounds: 0,
+        currentTickets: 0,
+        currentTicketList: [],
+        violationsCount: 0,
+        activeConstraints: 0,
+        totalCombinations: 0,
+        stepName: 'Initialization',
+        status: 'Connecting to Server CPU Engine...',
+        engine: 'Server Turbo CPU',
+      });
+    } else if (session.status === 'completed' && session.result) {
+      sendEvent('done', session.result);
+      res.end();
+      return;
+    } else if (session.status === 'error') {
+      sendEvent('error', { message: session.error || 'Server optimization failed' });
+      res.end();
+      return;
+    } else if (session.lastProgress) {
+      sendEvent('progress', session.lastProgress);
+    }
+
+    const listener = (event: string, data: any) => {
+      sendEvent(event, data);
+      if (event === 'done' || event === 'error') {
+        res.end();
+      }
+    };
+
+    if (session) {
+      session.listeners.push(listener);
+    }
+
+    const keepAliveTimer = setInterval(() => {
+      try {
+        res.write(': keepalive\n\n');
+        (res as any).flush?.();
+      } catch {}
+    }, 2000);
+
+    req.on('close', () => {
+      clearInterval(keepAliveTimer);
+      if (session) {
+        session.listeners = session.listeners.filter((l) => l !== listener);
+      }
+    });
   });
 
   // Server-side High-Performance Solver API (Server-Sent Events with persistent state)

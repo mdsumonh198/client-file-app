@@ -9,6 +9,7 @@ interface ResultSimulatorProps {
   targets?: TargetMap;
   activeResult: number[];
   onResultChange: (result: number[]) => void;
+  onSelectMatchTab?: (matchCount: number) => void;
 }
 
 export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
@@ -17,6 +18,7 @@ export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
   targets = {},
   activeResult,
   onResultChange,
+  onSelectMatchTab,
 }) => {
   const [customInput, setCustomInput] = useState('');
 
@@ -169,7 +171,14 @@ export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
               return (
                 <div
                   key={k}
-                  className={`p-2.5 rounded-lg border text-center transition-all ${
+                  onClick={() => {
+                    if (onSelectMatchTab) {
+                      onSelectMatchTab(k);
+                      const el = document.getElementById('tickets-section');
+                      if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }
+                  }}
+                  className={`p-2.5 rounded-lg border text-center transition-all cursor-pointer hover:scale-[1.03] select-none ${
                     hasTarget
                       ? passesTarget
                         ? 'bg-slate-900/90 border-emerald-500/50 ring-1 ring-emerald-500/30'
@@ -178,6 +187,7 @@ export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
                       ? 'bg-slate-900/90 border-amber-500/40 ring-1 ring-amber-500/20'
                       : 'bg-slate-900/40 border-slate-800'
                   }`}
+                  title={`Click to view tickets with ${k} matches`}
                 >
                   <span className="text-[11px] text-slate-400 block mb-0.5">Exact {k}</span>
                   <span

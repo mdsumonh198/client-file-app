@@ -541,6 +541,9 @@ export async function fastGreedyBitsetCover(
     const tOut = new Int32Array(N);
 
     for (let i = selectedTickets.length - 1; i >= 0; i--) {
+      if (i > 0 && i % 30 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       const t = selectedTickets[i];
       tIn.fill(0);
       for (let j = 0; j < K; j++) tIn[t[j]] = 1;

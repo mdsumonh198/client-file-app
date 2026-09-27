@@ -1,5 +1,6 @@
 import { GameConfig, OptimizationResult, TargetMap } from '../types';
 import { SolverProgressInfo } from './solver';
+import { runOptimizationWithWorker } from './workerClient';
 
 export interface ServerOptimizationController {
   stop: () => void;
@@ -26,60 +27,6 @@ export async function fetchSystemInfo(): Promise<SystemHardwareInfo | null> {
   }
 }
 
-async function pollSessionUntilComplete(
-  sessionId: string,
-  abortSignal: AbortSignal,
-  onProgress?: (info: SolverProgressInfo) => void
-): Promise<OptimizationResult> {
-  let consecutiveErrors = 0;
-  while (!abortSignal.aborted) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    if (abortSignal.aborted) {
-      throw new Error('Operation cancelled by user.');
-    }
-
-    try {
-      const res = await fetch(`/api/optimize/session/${sessionId}`, { signal: abortSignal });
-      if (!res.ok) {
-        consecutiveErrors++;
-        if (consecutiveErrors > 15) {
-          throw new Error('Lost connection to server optimization session.');
-        }
-        continue;
-      }
-      consecutiveErrors = 0;
-      const data = await res.json();
-
-      if (data.lastProgress) {
-        onProgress?.(data.lastProgress);
-      }
-
-      if (data.status === 'completed' && data.result) {
-        return data.result;
-      }
-
-      if (data.status === 'error') {
-        throw new Error(data.error || 'Server optimization encountered an error');
-      }
-
-      if (data.status === 'stopped') {
-        if (data.result) return data.result;
-        throw new Error('Server optimization was stopped.');
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw new Error('Operation cancelled by user.');
-      }
-      consecutiveErrors++;
-      if (consecutiveErrors > 15) {
-        throw err;
-      }
-    }
-  }
-
-  throw new Error('Operation cancelled by user.');
-}
-
 export function runOptimizationWithServer(params: {
   config: GameConfig;
   targets: TargetMap;
@@ -91,14 +38,22 @@ export function runOptimizationWithServer(params: {
   const abortController = new AbortController();
 
   let isDone = false;
+  let activeEventSource: EventSource | null = null;
+  let pollInterval: any = null;
+  let workerFallbackController: { stop: () => void; terminate: () => void } | null = null;
 
   const promise = new Promise<OptimizationResult>(async (resolve, reject) => {
-    let pollInterval: any = null;
-
     const cleanupAndResolve = (result: OptimizationResult) => {
       if (!isDone) {
         isDone = true;
-        if (pollInterval) clearInterval(pollInterval);
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+        if (activeEventSource) {
+          activeEventSource.close();
+          activeEventSource = null;
+        }
         resolve(result);
       }
     };
@@ -106,47 +61,56 @@ export function runOptimizationWithServer(params: {
     const cleanupAndReject = (err: any) => {
       if (!isDone) {
         isDone = true;
-        if (pollInterval) clearInterval(pollInterval);
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+        if (activeEventSource) {
+          activeEventSource.close();
+          activeEventSource = null;
+        }
         reject(err);
       }
     };
 
-    // Concurrent heartbeat polling every 450ms.
-    // Guarantees real-time progress even if proxy buffers the SSE response body!
-    pollInterval = setInterval(async () => {
-      if (isDone || abortController.signal.aborted) {
-        clearInterval(pollInterval);
-        return;
-      }
-      try {
-        const res = await fetch(`/api/optimize/session/${sessionId}`, { signal: abortController.signal });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'initializing') {
-            return;
-          }
-          if (data.lastProgress && !isDone) {
-            onProgress?.(data.lastProgress);
-          }
-          if (data.status === 'completed' && data.result) {
-            cleanupAndResolve(data.result);
-          } else if (data.status === 'error') {
-            cleanupAndReject(new Error(data.error || 'Server optimization failed'));
-          } else if (data.status === 'stopped' && data.result) {
-            cleanupAndResolve(data.result);
-          }
-        }
-      } catch {
-        // Ignore background polling network blips
-      }
-    }, 450);
+    const switchToWorkerFallback = (reason: string) => {
+      if (isDone) return;
+      console.warn(`[Server Turbo Engine] ${reason}. Falling back to Browser Web Worker...`);
+      onProgress?.({
+        round: 0,
+        maxRounds: 0,
+        currentTickets: 0,
+        currentTicketList: [],
+        violationsCount: 0,
+        activeConstraints: 0,
+        totalCombinations: 0,
+        stepName: 'Worker Fallback',
+        status: `সার্ভার প্রক্সি সীমাবদ্ধতার কারণে স্বয়ংক্রিয়ভাবে লোকাল ব্রাউজার ওয়ার্কারে সুইচ করা হচ্ছে...`,
+        engine: 'Browser Worker (Fallback)',
+      });
 
+      const workerController = runOptimizationWithWorker({
+        numberFrom: config.numberFrom,
+        numberTo: config.numberTo,
+        ticketSize: config.ticketSize,
+        resultSize: config.resultSize,
+        targets,
+        timeLimitSeconds: options?.timeLimitSeconds,
+        maxRounds: options?.maxRounds,
+        onProgress,
+      });
+
+      workerFallbackController = workerController;
+      workerController.promise
+        .then(cleanupAndResolve)
+        .catch(cleanupAndReject);
+    };
+
+    // Step 1: Start background optimization job on the server
     try {
-      const response = await fetch('/api/optimize', {
+      const startRes = await fetch('/api/optimize/start', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           config,
           targets,
@@ -156,114 +120,89 @@ export function runOptimizationWithServer(params: {
         signal: abortController.signal,
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error(`Server returned HTTP ${response.status}: ${response.statusText}`);
+      if (!startRes.ok) {
+        switchToWorkerFallback(`Server returned HTTP ${startRes.status}`);
+        return;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let currentEvent = 'message';
-      let currentDataLines: string[] = [];
+      const startData = await startRes.json();
+      const actualSessionId = startData.sessionId || sessionId;
 
-      const dispatchCurrentEvent = () => {
-        if (currentDataLines.length === 0) return;
-        const dataStr = currentDataLines.join('\n');
-        currentDataLines = [];
+      // Step 2: Connect native GET EventSource for real-time streaming
+      try {
+        const es = new EventSource(`/api/optimize/events/${actualSessionId}`);
+        activeEventSource = es;
 
-        try {
-          const parsed = JSON.parse(dataStr);
-          if (currentEvent === 'progress') {
-            if (!isDone) onProgress?.(parsed);
-          } else if (currentEvent === 'done') {
+        es.addEventListener('progress', (e: MessageEvent) => {
+          if (isDone) return;
+          try {
+            const parsed = JSON.parse(e.data);
+            onProgress?.(parsed);
+          } catch {}
+        });
+
+        es.addEventListener('done', (e: MessageEvent) => {
+          try {
+            const parsed = JSON.parse(e.data);
             cleanupAndResolve(parsed);
-          } else if (currentEvent === 'error') {
-            cleanupAndReject(new Error(parsed.message || 'Server optimization failed'));
-          }
-        } catch (parseErr) {
-          console.warn('Failed to parse SSE data packet:', parseErr);
-        }
-        currentEvent = 'message';
-      };
+          } catch {}
+        });
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        // keep uncompleted trailing line in buffer
-        buffer = lines.pop() || '';
-
-        for (const rawLine of lines) {
-          const line = rawLine.replace(/\r$/, '');
-
-          if (line === '') {
-            // Empty line marks end of an SSE message block
-            dispatchCurrentEvent();
-            continue;
-          }
-
-          if (line.startsWith(':')) {
-            // Comment / heartbeat keepalive line - ignore
-            continue;
-          }
-
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            currentDataLines.push(line.slice(5).trim());
-          }
-        }
+        es.addEventListener('error', () => {
+          // Keep polling active even if EventSource encounters temporary network hiccup
+        });
+      } catch (esErr) {
+        console.warn('Native EventSource initialization skipped:', esErr);
       }
 
-      // Flush any remaining buffered message
-      if (buffer.trim()) {
-        const line = buffer.replace(/\r$/, '');
-        if (line.startsWith('data:')) {
-          currentDataLines.push(line.slice(5).trim());
+      // Step 3: Concurrent Heartbeat Polling every 450ms
+      // Guarantees zero missed updates even through reverse-proxy buffering
+      pollInterval = setInterval(async () => {
+        if (isDone || abortController.signal.aborted) {
+          if (pollInterval) clearInterval(pollInterval);
+          return;
         }
-      }
-      dispatchCurrentEvent();
 
-      // If SSE connection closed without a final done event (e.g. proxy timeout / WiFi drop),
-      // seamlessly reconnect/poll session on the server instead of failing!
-      if (!isDone) {
         try {
-          const polledResult = await pollSessionUntilComplete(
-            sessionId,
-            abortController.signal,
-            onProgress
-          );
-          isDone = true;
-          resolve(polledResult);
-        } catch (pollErr: any) {
-          if (!isDone) {
-            reject(pollErr);
+          const pollRes = await fetch(`/api/optimize/session/${actualSessionId}`, {
+            signal: abortController.signal,
+          });
+
+          if (pollRes.ok) {
+            const data = await pollRes.json();
+            if (data.status === 'initializing') {
+              return;
+            }
+
+            if (data.lastProgress && !isDone) {
+              onProgress?.(data.lastProgress);
+            }
+
+            if (data.status === 'completed' && data.result) {
+              cleanupAndResolve(data.result);
+            } else if (data.status === 'error') {
+              cleanupAndReject(new Error(data.error || 'Server optimization encountered an error'));
+            } else if (data.status === 'stopped' && data.result) {
+              cleanupAndResolve(data.result);
+            }
           }
+        } catch {
+          // Ignore transient polling network drops
         }
-      }
+      }, 450);
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        reject(new Error('Operation cancelled by user.'));
-      } else if (!isDone) {
-        // Attempt recovery via session poll
-        try {
-          const polledResult = await pollSessionUntilComplete(
-            sessionId,
-            abortController.signal,
-            onProgress
-          );
-          isDone = true;
-          resolve(polledResult);
-        } catch {
-          reject(err);
-        }
+        cleanupAndReject(new Error('Operation cancelled by user.'));
+      } else {
+        switchToWorkerFallback(`Connection error: ${err.message}`);
       }
     }
   });
 
   const stop = () => {
+    if (workerFallbackController) {
+      workerFallbackController.stop();
+    }
     fetch('/api/optimize/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -272,8 +211,19 @@ export function runOptimizationWithServer(params: {
   };
 
   const terminate = () => {
+    if (workerFallbackController) {
+      workerFallbackController.terminate();
+    }
     stop();
     abortController.abort();
+    if (activeEventSource) {
+      activeEventSource.close();
+      activeEventSource = null;
+    }
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
   };
 
   return { stop, terminate, promise };

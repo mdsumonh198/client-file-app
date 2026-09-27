@@ -67,6 +67,7 @@ export const App: React.FC = () => {
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [activeDrawnResult, setActiveDrawnResult] = useState<number[]>([]);
+  const [activeMatchTab, setActiveMatchTab] = useState<number | 'all'>('all');
 
   const stopRequestedRef = useRef<boolean>(false);
   const timerIntervalRef = useRef<any>(null);
@@ -400,9 +401,9 @@ export const App: React.FC = () => {
                   className="bg-slate-950 border border-cyan-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 >
                   <option value="server">
-                    🚀 Server Turbo ({serverHardware ? `${serverHardware.cpuCores} Core CPU / ${serverHardware.totalMemoryGB}GB RAM` : 'VPS CPU'})
+                    🚀 VPS / Server Turbo ({serverHardware ? `${serverHardware.cpuCores} Core CPU / ${serverHardware.totalMemoryGB}GB RAM` : 'Cloud CPU'})
                   </option>
-                  <option value="browser">💻 Browser Web Worker (Local)</option>
+                  <option value="browser">💻 Web / Browser Worker (Local)</option>
                 </select>
               </div>
 
@@ -650,7 +651,8 @@ export const App: React.FC = () => {
                 <div className="mt-2 text-[11px] text-slate-400 flex flex-wrap items-center gap-3">
                   <span>ধাপ: <b className="text-cyan-300 font-mono">{liveInfo?.stepName || 'Processing'}</b></span>
                   <span>ইঞ্জিন: <b className="text-indigo-300 font-mono">{liveInfo?.engine || 'Server Turbo CPU'}</b></span>
-                  <span>রাউন্ড: <b className="text-emerald-300 font-mono">{liveInfo?.round || 1} / {liveInfo?.maxRounds || 30}</b></span>
+                  <span>টিকিট: <b className="text-emerald-300 font-mono">{liveInfo?.currentTickets || 0}টি</b></span>
+                  <span>টার্গেট: <b className="text-emerald-400 font-mono">FAIL = 0 (100% কভার)</b></span>
                 </div>
               </div>
 
@@ -883,12 +885,16 @@ export const App: React.FC = () => {
               targets={targets}
               activeResult={activeDrawnResult}
               onResultChange={(res) => setActiveDrawnResult(res)}
+              onSelectMatchTab={(tab) => setActiveMatchTab(tab)}
             />
 
             {/* Generated Tickets View */}
             <TicketsView
               tickets={result.tickets}
               highlightNumbers={activeDrawnResult}
+              resultSize={config.resultSize}
+              activeMatchTab={activeMatchTab}
+              onMatchTabChange={(tab) => setActiveMatchTab(tab)}
             />
           </section>
         )}
