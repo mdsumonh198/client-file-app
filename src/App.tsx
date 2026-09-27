@@ -25,10 +25,7 @@ export const App: React.FC = () => {
     resultSize: 6,
   });
 
-  const [targets, setTargets] = useState<TargetMap>({
-    4: 1,
-    3: 3,
-  });
+  const [targets, setTargets] = useState<TargetMap>({});
 
   const [timeLimit, setTimeLimit] = useState<number>(0); // 0 = No Limit (Run Until Solved / Proved)
   const [isSolving, setIsSolving] = useState<boolean>(false);
@@ -171,7 +168,9 @@ export const App: React.FC = () => {
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 {activeTargetEntries.length === 0 ? (
-                  <span className="text-xs text-amber-400">No targets specified yet</span>
+                  <span className="text-xs text-amber-400/90 italic">
+                    কোনো টার্গেট সেট করা নেই — নিচে টার্গেট অ্যাড করুন
+                  </span>
                 ) : (
                   activeTargetEntries.map(({ k, min }) => (
                     <span
@@ -210,11 +209,15 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={handleStartOptimization}
-              disabled={isSolving}
-              className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-50 cursor-pointer"
+              disabled={isSolving || activeTargetEntries.length === 0}
+              className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               <Rocket className="w-4 h-4 fill-slate-950" />
-              {isSolving ? 'Optimizing Combination Space...' : 'Start Combinatorial Optimization'}
+              {isSolving
+                ? 'Optimizing Combination Space...'
+                : activeTargetEntries.length === 0
+                ? 'আগে নিচে টার্গেট অ্যাড করুন'
+                : 'Calculate Minimum Tickets For Targets'}
             </button>
 
             {result && (

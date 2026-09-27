@@ -181,8 +181,16 @@ export const TargetsMatrix: React.FC<TargetsMatrixProps> = ({
         </span>
 
         {activeTargetEntries.length === 0 ? (
-          <div className="p-4 border border-dashed border-slate-800 rounded-lg text-center text-xs text-slate-500">
-            No targets configured yet. Select an exact match number (e.g. Exact 5) and required count (e.g. &ge; 1) above.
+          <div className="p-6 border border-dashed border-indigo-500/30 bg-slate-950/40 rounded-xl text-center space-y-2">
+            <div className="inline-flex p-2.5 rounded-full bg-indigo-500/10 text-indigo-400 mb-1">
+              <SlidersHorizontal className="w-5 h-5 text-indigo-400" />
+            </div>
+            <p className="text-xs font-semibold text-slate-200">
+              ক্যালকুলেশন শুরু করার জন্য আপনার টার্গেট সিলেক্ট করুন
+            </p>
+            <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+              উপরে <span className="text-cyan-300 font-mono font-bold">Exact Match (k)</span> ও <span className="text-cyan-300 font-mono font-bold">Min Win Count (&ge;)</span> দিন এবং <span className="text-indigo-400 font-bold">+ Add Target</span> চাপুন। সেই টার্গেট গ্যারান্টি করতে সর্বনিম্ন কতটি টিকিট লাগবে তা স্বয়ংক্রিয়ভাবে জেনারেট হবে।
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
