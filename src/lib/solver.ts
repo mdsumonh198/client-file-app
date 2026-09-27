@@ -8,17 +8,25 @@ import { TargetMap, OptimizationResult, SolverStatus } from '../types';
 import { findViolatingResults, verifyTicketSet } from './verifier';
 import lpSolver from 'javascript-lp-solver';
 
+export interface SolverProgressInfo {
+  round: number;
+  maxRounds: number;
+  currentTickets: number;
+  violationsCount: number;
+  deficit?: number;
+  activeConstraints: number;
+  totalCombinations: number;
+  stepName: string;
+  status: string;
+  engine?: string;
+}
+
 export interface SolverOptions {
   timeLimitSeconds?: number;
   seedConstraintCount?: number;
   maxRounds?: number;
-  onProgress?: (info: {
-    round: number;
-    currentTickets: number;
-    violationsCount: number;
-    status: string;
-    engine?: string;
-  }) => void;
+  shouldStop?: () => boolean;
+  onProgress?: (info: SolverProgressInfo) => void;
 }
 
 // Lazy-load WebAssembly HiGHS solver
@@ -288,6 +296,7 @@ export async function optimizeWithConstraintGeneration(
     timeLimitSeconds = 0, // 0 = Unlimited (runs until 100% full convergence or proved optimal)
     seedConstraintCount = 30,
     maxRounds = 300,
+    shouldStop,
     onProgress,
   } = options;
 
@@ -337,16 +346,39 @@ export async function optimizeWithConstraintGeneration(
 
   onProgress?.({
     round: 1,
+    maxRounds,
     currentTickets: 0,
     violationsCount: 0,
-    status: `Seeded ${activeResults.length} initial constraints across ${allResults.length.toLocaleString()} results. Solving master problem...`,
+    activeConstraints: activeResults.length,
+    totalCombinations: allResults.length,
+    stepName: 'প্রাথমিক সিড কনস্ট্রেইন্ট তৈরি',
+    status: `${activeResults.length} টি প্রাথমিক ড্র সিড নিয়ে মাস্টার প্রবলেম প্রস্তুত করা হয়েছে। সলভার শুরু হচ্ছে...`,
+    engine: usedEngine,
   });
 
   for (let round = 1; round <= maxRounds; round++) {
+    if (shouldStop?.()) {
+      break;
+    }
+
     const elapsed = Date.now() - startTime;
     if (!isUnlimitedTime && elapsed >= timeLimitMs && currentTickets.length > 0) {
       break;
     }
+
+    onProgress?.({
+      round,
+      maxRounds,
+      currentTickets: currentTickets.length,
+      violationsCount: 0,
+      activeConstraints: activeResults.length,
+      totalCombinations: allResults.length,
+      stepName: 'মাস্টার প্রবলেম অপ্টিমাইজেশন (HiGHS MILP)',
+      status: `রাউন্ড ${round}: ${activeResults.length} টি ড্র কনস্ট্রেইন্টের জন্য সর্বনিম্ন টিকিট সংখ্যা খোঁজা হচ্ছে...`,
+      engine: usedEngine,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     const remainingBudgetSec = isUnlimitedTime
       ? 120
@@ -369,13 +401,23 @@ export async function optimizeWithConstraintGeneration(
       currentTickets = ipResult.selectedIndices.map((idx) => allTickets[idx].nums);
     }
 
+    if (shouldStop?.()) {
+      break;
+    }
+
     onProgress?.({
       round,
+      maxRounds,
       currentTickets: currentTickets.length,
       violationsCount: 0,
-      status: `Round ${round}: Master problem solved (${currentTickets.length} tickets). Running 100% SWAR verification across ${allResults.length.toLocaleString()} results...`,
+      activeConstraints: activeResults.length,
+      totalCombinations: allResults.length,
+      stepName: '১০০% ড্র স্পেস ভেরিফিকেশন (64-bit SWAR Popcount)',
+      status: `রাউন্ড ${round}: বর্তমান সমাধান (${currentTickets.length} টিকিট) দিয়ে সব ${allResults.length.toLocaleString()} টি ড্র টেস্ট করা হচ্ছে...`,
       engine: usedEngine,
     });
+
+    await new Promise((resolve) => setTimeout(resolve, 15));
 
     // Separation Oracle:
     // Check ticket set against 100% of all possible results using exact SWAR popcount bitmasks
@@ -438,9 +480,14 @@ export async function optimizeWithConstraintGeneration(
     const deepestDeficit = violations[0]?.totalDeficit ?? 1;
     onProgress?.({
       round,
+      maxRounds,
       currentTickets: currentTickets.length,
       violationsCount: violations.length,
-      status: `Round ${round}: Found ${violations.length} violating results (Max deficit: ${deepestDeficit}). Added ${newlyAdded} deepest cuts. Re-optimizing...`,
+      deficit: deepestDeficit,
+      activeConstraints: activeResults.length,
+      totalCombinations: allResults.length,
+      stepName: 'ডিপেস্ট কাটিং-প্লেন ইনজেকশন',
+      status: `রাউন্ড ${round}: ${violations.length} টি ড্র-তে উইন কম হয়েছে। ${newlyAdded} টি নতুন কাট মাস্টার প্রবলেমে যুক্ত করা হয়েছে (মোট অ্যাক্টিভ কাট: ${activeResults.length})।`,
       engine: usedEngine,
     });
 
@@ -449,7 +496,7 @@ export async function optimizeWithConstraintGeneration(
     }
 
     // Yield to browser event loop so UI stays responsive
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
   // Final exhaustive verification across 100% of all results
