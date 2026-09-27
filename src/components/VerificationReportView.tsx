@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { VerificationReport, SolverStatus } from '../types';
-import { Download, Award, AlertTriangle, CheckCircle2, XCircle, Ticket as TicketIcon } from 'lucide-react';
+import { Download, Award, AlertTriangle, CheckCircle2, XCircle, Copy, Check, FileSpreadsheet } from 'lucide-react';
+import { copyTextToClipboard } from '../lib/clipboard';
 
 interface VerificationReportViewProps {
   report: VerificationReport;
@@ -23,6 +24,8 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   tickets = [],
   onSelectResultToTest,
 }) => {
+  const [copiedForSheets, setCopiedForSheets] = useState(false);
+
   // Guarantee stats (e.g. 5+ Matches: at least 5 or 6 matches)
   const guaranteeList = report.guaranteeStats && report.guaranteeStats.length > 0
     ? report.guaranteeStats
@@ -31,7 +34,47 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   // Individual exact match breakdown rows (sorted descending from Jackpot down to 0)
   const exactBreakdownList = Object.values(report.stats).sort((a, b) => b.k - a.k);
 
-  // Download Full CSV containing Audit Proof + 100% of Generated Tickets
+  // 1. Dedicated Clean Tickets-Only Export for Direct Google Sheets / Excel Opening
+  const handleDownloadTicketsOnlyCSV = () => {
+    if (tickets.length === 0) return;
+    const ticketK = tickets[0].length;
+    const individualHeaders = Array.from({ length: ticketK }, (_, i) => `Num_${i + 1}`).join(',');
+    const header = `Ticket_No,Full_Combination,${individualHeaders}`;
+    const rows = tickets.map((t, idx) => {
+      const formatted = t.map((n) => String(n).padStart(2, '0')).join(', ');
+      return `${idx + 1},"${formatted}",${t.join(',')}`;
+    }).join('\r\n');
+
+    const csvContent = `\uFEFF${header}\r\n${rows}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lottery_tickets_list_${tickets.length}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // 2. Direct 1-Click Copy for Pasting directly into Google Sheets (Tab-Separated)
+  const handleCopyTicketsForSheets = async () => {
+    if (tickets.length === 0) return;
+    const ticketK = tickets[0].length;
+    const header = ['Ticket #', 'Full Ticket', ...Array.from({ length: ticketK }, (_, i) => `Num ${i + 1}`)].join('\t');
+    const rows = tickets.map((t, idx) => {
+      const formatted = t.map((n) => String(n).padStart(2, '0')).join(', ');
+      return `${idx + 1}\t${formatted}\t${t.join('\t')}`;
+    }).join('\n');
+
+    const success = await copyTextToClipboard(`${header}\n${rows}`);
+    if (success) {
+      setCopiedForSheets(true);
+      setTimeout(() => setCopiedForSheets(false), 2500);
+    }
+  };
+
+  // 3. Download Full Combined CSV containing Audit Proof + 100% of Generated Tickets
   const handleDownloadFullCSV = () => {
     const summaryRows = [
       `--- LOTTERY MATHEMATICAL GUARANTEE PROOF & TICKET LIST ---`,
@@ -44,7 +87,7 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       `Zero-Miss Status,${report.allTargetsPass ? '100% ZERO-MISS PROVEN' : 'FAIL'}`,
       `Match Rule,Strict Intersection (Guarantee target met on every single draw)`,
       '',
-    ].join('\n');
+    ].join('\r\n');
 
     const headers = [
       'Category / Match Level',
@@ -87,37 +130,14 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       `--- COMPLETE GENERATED TICKET LIST (সম্পূর্ণ টিকেট তালিকা - মোট ${tickets.length}টি টিকেট) ---`,
       ticketHeaders,
       ...ticketRows,
-    ].join('\n');
+    ].join('\r\n');
 
-    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${[...gRows, ...statRows].join('\n')}\n${ticketSection}`;
+    const csvContent = `\uFEFF${summaryRows}\r\n${headers}\r\n${[...gRows, ...statRows].join('\r\n')}\r\n${ticketSection}`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'lottery_guarantee_and_tickets.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
-  // Download Clean Tickets Only (CSV) for direct upload or printing
-  const handleDownloadTicketsOnlyCSV = () => {
-    if (tickets.length === 0) return;
-    const ticketK = tickets[0].length;
-    const individualHeaders = Array.from({ length: ticketK }, (_, i) => `N${i + 1}`).join(',');
-    const header = `Ticket_ID,Full_Ticket,${individualHeaders}`;
-    const rows = tickets.map((t, idx) => {
-      const formatted = t.map((n) => String(n).padStart(2, '0')).join(', ');
-      return `${idx + 1},"${formatted}",${t.join(',')}`;
-    }).join('\n');
-
-    const csvContent = `\uFEFF${header}\n${rows}`;
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'optimized_tickets_list.csv';
+    link.download = `lottery_guarantee_and_tickets_${tickets.length}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -175,27 +195,45 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {tickets.length > 0 && (
+            <>
+              {/* PRIMARY PROMINENT BUTTON: Google Sheets Ticket List */}
+              <button
+                type="button"
+                onClick={handleDownloadTicketsOnlyCSV}
+                className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-lg shadow-lg hover:shadow-emerald-600/30 transition-all shrink-0 cursor-pointer"
+                title="Download clean CSV of tickets directly formatted for Google Sheets or Excel"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+                <span>Google Sheets-এ টিকেট লিস্ট (CSV)</span>
+                <span className="ml-1 px-1.5 py-0.2 rounded bg-emerald-800 text-[10px] text-emerald-100">
+                  {tickets.length} Tickets
+                </span>
+              </button>
+
+              {/* COPY BUTTON: Instant paste into Google Sheets */}
+              <button
+                type="button"
+                onClick={handleCopyTicketsForSheets}
+                className="flex items-center gap-1.5 text-xs bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 px-3 py-2 rounded-lg border border-indigo-500/40 transition-colors shrink-0 cursor-pointer font-semibold shadow-sm"
+                title="Copy all tickets in tab-separated format for direct Ctrl+V paste into Google Sheets"
+              >
+                {copiedForSheets ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedForSheets ? 'Copied for Sheets!' : 'শিটে পেস্ট করতে কপি (Ctrl+V)'}</span>
+              </button>
+            </>
+          )}
+
+          {/* COMBINED AUDIT + TICKETS */}
           <button
             type="button"
             onClick={handleDownloadFullCSV}
-            className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-2 rounded-lg shadow-md transition-colors shrink-0"
+            className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition-colors shrink-0 cursor-pointer"
             title="Download CSV containing full verification audit and all generated tickets"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download All Tickets & Audit (CSV)</span>
+            <Download className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Full Audit & Tickets (CSV)</span>
           </button>
-
-          {tickets.length > 0 && (
-            <button
-              type="button"
-              onClick={handleDownloadTicketsOnlyCSV}
-              className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition-colors shrink-0"
-              title="Download clean CSV of tickets only for printing or submission"
-            >
-              <TicketIcon className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Tickets Only (CSV)</span>
-            </button>
-          )}
         </div>
       </div>
 

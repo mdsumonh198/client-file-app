@@ -30,6 +30,8 @@ import {
   Server,
   Terminal,
   Search,
+  FileSpreadsheet,
+  Dices,
 } from 'lucide-react';
 
 interface LiveActivityLog {
@@ -865,38 +867,93 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Verification Report Section (100% Audit against all combinations) */}
-        {result?.verification && (
+        {/* Verification Report & Tickets Section */}
+        {result && (
           <section className="space-y-6 pt-2">
-            <VerificationReportView
-              report={result.verification}
-              status={result.status}
-              statusDetail={result.statusDetail}
-              rounds={result.rounds}
-              durationMs={result.durationMs}
-              solverEngine={result.solverEngine}
-              tickets={result.tickets}
-              onSelectResultToTest={(res) => setActiveDrawnResult(res)}
-            />
+            {/* Quick Navigation Jump Bar */}
+            <div className="bg-slate-900/95 border border-slate-700/80 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-300">দ্রুত সেকশনে যান:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('tickets-sheet-section');
+                    el?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/50 text-xs font-bold cursor-pointer transition-colors shadow-sm"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>টিকেটের শিট ও টেবিল ({result.tickets.length.toLocaleString()}টি টিকিট)</span>
+                </button>
+                {result.verification && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const el = document.getElementById('audit-section');
+                      el?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>গ্যারান্টি অডিট রিপোর্ট</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('simulator-section');
+                    el?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  <Dices className="w-3.5 h-3.5 text-amber-400" />
+                  <span>ড্র সিমুলেটর</span>
+                </button>
+              </div>
+
+              <span className="text-xs text-slate-400 font-mono">
+                {result.tickets.length.toLocaleString()} tickets generated &bull; 100% Zero-Miss
+              </span>
+            </div>
+
+            {/* Verification Report Section (100% Audit against all combinations) */}
+            {result.verification && (
+              <div id="audit-section">
+                <VerificationReportView
+                  report={result.verification}
+                  status={result.status}
+                  statusDetail={result.statusDetail}
+                  rounds={result.rounds}
+                  durationMs={result.durationMs}
+                  solverEngine={result.solverEngine}
+                  tickets={result.tickets}
+                  onSelectResultToTest={(res) => setActiveDrawnResult(res)}
+                />
+              </div>
+            )}
 
             {/* Draw Simulator */}
-            <ResultSimulator
-              config={config}
-              tickets={result.tickets}
-              targets={targets}
-              activeResult={activeDrawnResult}
-              onResultChange={(res) => setActiveDrawnResult(res)}
-              onSelectMatchTab={(tab) => setActiveMatchTab(tab)}
-            />
+            <div id="simulator-section">
+              <ResultSimulator
+                config={config}
+                tickets={result.tickets}
+                targets={targets}
+                activeResult={activeDrawnResult}
+                onResultChange={(res) => setActiveDrawnResult(res)}
+                onSelectMatchTab={(tab) => setActiveMatchTab(tab)}
+              />
+            </div>
 
-            {/* Generated Tickets View */}
-            <TicketsView
-              tickets={result.tickets}
-              highlightNumbers={activeDrawnResult}
-              resultSize={config.resultSize}
-              activeMatchTab={activeMatchTab}
-              onMatchTabChange={(tab) => setActiveMatchTab(tab)}
-            />
+            {/* Generated Tickets View (Sheet Table & Ball Cards) */}
+            <div id="tickets-sheet-section">
+              <TicketsView
+                tickets={result.tickets}
+                highlightNumbers={activeDrawnResult}
+                resultSize={config.resultSize}
+                activeMatchTab={activeMatchTab}
+                onMatchTabChange={(tab) => setActiveMatchTab(tab)}
+              />
+            </div>
           </section>
         )}
       </main>

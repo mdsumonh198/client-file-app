@@ -9,9 +9,12 @@ import {
   Trophy,
   Filter,
   HelpCircle,
-  ChevronDown,
-  ChevronUp,
+  FileSpreadsheet,
+  Table,
+  Grid,
+  SlidersHorizontal,
 } from 'lucide-react';
+import { copyTextToClipboard } from '../lib/clipboard';
 
 interface TicketsViewProps {
   tickets: number[][];
@@ -30,10 +33,14 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
 }) => {
   const [internalTab, setInternalTab] = useState<number | 'all'>('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [copied, setCopied] = useState(false);
   const [page, setPage] = useState(1);
-  const [showExplanation, setShowExplanation] = useState(true);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [viewMode, setViewMode] = useState<'sheet' | 'grid'>('sheet'); // Default to 'sheet' as requested
+  const [showSheetsGuide, setShowSheetsGuide] = useState(false);
+
+  const [copiedForSheets, setCopiedForSheets] = useState(false);
+  const [copiedSingleCol, setCopiedSingleCol] = useState(false);
+  const [copiedTicketId, setCopiedTicketId] = useState<number | null>(null);
 
   const currentTab = activeMatchTab !== undefined ? activeMatchTab : internalTab;
   const setTab = (tab: number | 'all') => {
@@ -47,13 +54,13 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
 
   const highlightSet = useMemo(() => new Set(highlightNumbers), [highlightNumbers]);
 
-  // Pre-calculate exact matches per ticket against the active drawn result
+  // Pre-calculate exact matches per ticket against active drawn result
   const ticketMatches = useMemo(() => {
     if (!highlightNumbers || highlightNumbers.length === 0) return null;
     return tickets.map((t) => t.filter((n) => highlightSet.has(n)).length);
   }, [tickets, highlightNumbers, highlightSet]);
 
-  // Aggregate count of tickets for each match level (e.g. 0 to resultSize)
+  // Match counts breakdown across tiers
   const matchCounts = useMemo(() => {
     const counts: Record<number, number> = {};
     for (let k = 0; k <= resultSize; k++) {
@@ -70,7 +77,7 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     return counts;
   }, [ticketMatches, resultSize]);
 
-  // Filter tickets by selected match tab
+  // Filter items by match tab
   const tabFilteredItems = useMemo(() => {
     if (currentTab === 'all' || !ticketMatches) {
       return tickets.map((t, idx) => ({
@@ -108,48 +115,45 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     );
   }, [tabFilteredItems, searchTerm]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredTickets.length / pageSize));
+  const effectivePageSize = pageSize === 0 ? Math.max(1, filteredTickets.length) : pageSize;
+  const totalPages = Math.max(1, Math.ceil(filteredTickets.length / effectivePageSize));
   const currentTickets = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredTickets.slice(start, start + pageSize);
-  }, [filteredTickets, page]);
+    if (pageSize === 0) return filteredTickets;
+    const start = (page - 1) * effectivePageSize;
+    return filteredTickets.slice(start, start + effectivePageSize);
+  }, [filteredTickets, page, effectivePageSize, pageSize]);
 
-  const [copiedSingleCol, setCopiedSingleCol] = useState(false);
-  const [copiedTicketId, setCopiedTicketId] = useState<number | null>(null);
+  const ticketSize = tickets.length > 0 ? tickets[0].length : 6;
 
+  // 1. Download Clean CSV (RFC 4180 with CRLF \r\n and UTF-8 BOM)
   const handleDownloadCSV = (onlyCurrentTab: boolean = false) => {
-    const exportItems = onlyCurrentTab
-      ? filteredTickets
-      : tickets.map((t, idx) => ({
-          ticket: t,
-          globalIdx: idx + 1,
-          matchCount: ticketMatches ? ticketMatches[idx] : null,
-        }));
+    const exportItems = onlyCurrentTab ? filteredTickets : tickets.map((t, idx) => ({
+      ticket: t,
+      globalIdx: idx + 1,
+      matchCount: ticketMatches ? ticketMatches[idx] : null,
+    }));
 
     if (exportItems.length === 0) return;
 
     const sampleTicket = exportItems[0].ticket;
-    const individualHeaders = sampleTicket.map((_, i) => `N${i + 1}`).join(',');
-
-    // Column B has the FULL ticket numbers in 1 single column for easy copying in Google Sheets / Excel
-    const header = `Ticket_ID,Full_Ticket,Full_Ticket_Space,Match_Count,${individualHeaders}`;
+    const numHeaders = sampleTicket.map((_, i) => `Num_${i + 1}`).join(',');
+    const header = `Ticket_No,Full_Combination,${numHeaders}${ticketMatches ? ',Matches' : ''}`;
 
     const rows = exportItems.map((item) => {
-      const formattedComma = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
-      const formattedSpace = item.ticket.map((n) => String(n).padStart(2, '0')).join(' ');
-      const matchStr = item.matchCount !== null ? item.matchCount : '';
-      const splitNums = item.ticket.join(',');
-      return `${item.globalIdx},"${formattedComma}","${formattedSpace}",${matchStr},${splitNums}`;
-    }).join('\n');
+      const formatted = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+      const nums = item.ticket.join(',');
+      const matchCol = item.matchCount !== null ? `,${item.matchCount}` : '';
+      return `${item.globalIdx},"${formatted}",${nums}${matchCol}`;
+    }).join('\r\n');
 
-    const csvData = `\uFEFF${header}\n${rows}`;
-    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+    const csvContent = `\uFEFF${header}\r\n${rows}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     const filename = onlyCurrentTab && currentTab !== 'all'
-      ? `tickets_${currentTab}_match.csv`
-      : 'tickets_all.csv';
+      ? `lottery_tickets_${currentTab}_match_${exportItems.length}.csv`
+      : `lottery_tickets_sheet_${exportItems.length}.csv`;
     link.download = filename;
     document.body.appendChild(link);
     link.click();
@@ -157,8 +161,71 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // Copy pure 1-column ticket list (e.g. "02, 03, 04, 05, 06, 07\n01, 03, ...")
-  const handleCopySingleColumn = (onlyCurrentTab: boolean = false) => {
+  // 2. Download TSV (Tab-Separated Values) for direct Excel / Google Sheets opening without delimiter questions
+  const handleDownloadTSV = (onlyCurrentTab: boolean = false) => {
+    const exportItems = onlyCurrentTab ? filteredTickets : tickets.map((t, idx) => ({
+      ticket: t,
+      globalIdx: idx + 1,
+      matchCount: ticketMatches ? ticketMatches[idx] : null,
+    }));
+
+    if (exportItems.length === 0) return;
+
+    const sampleTicket = exportItems[0].ticket;
+    const numHeaders = sampleTicket.map((_, i) => `Num ${i + 1}`).join('\t');
+    const header = `Ticket #\tFull Ticket\t${numHeaders}${ticketMatches ? '\tMatches' : ''}`;
+
+    const rows = exportItems.map((item) => {
+      const formatted = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+      const nums = item.ticket.join('\t');
+      const matchCol = item.matchCount !== null ? `\t${item.matchCount}` : '';
+      return `${item.globalIdx}\t${formatted}\t${nums}${matchCol}`;
+    }).join('\r\n');
+
+    const tsvContent = `\uFEFF${header}\r\n${rows}`;
+    const blob = new Blob([tsvContent], { type: 'text/tab-separated-values;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `lottery_tickets_sheet_${exportItems.length}.tsv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // 3. Reliable Copy for Google Sheets (Pastes across columns cleanly with Ctrl+V)
+  const handleCopyForGoogleSheets = async (onlyCurrentTab: boolean = false) => {
+    const exportItems = onlyCurrentTab
+      ? filteredTickets
+      : tickets.map((t, idx) => ({
+          ticket: t,
+          globalIdx: idx + 1,
+          matchCount: ticketMatches ? ticketMatches[idx] : null,
+        }));
+    if (exportItems.length === 0) return;
+
+    const sampleTicket = exportItems[0].ticket;
+    const numHeaders = sampleTicket.map((_, i) => `Num ${i + 1}`).join('\t');
+    const header = `Ticket #\tFull Ticket\t${numHeaders}${ticketMatches ? '\tMatches' : ''}`;
+
+    const text = exportItems
+      .map((item) => {
+        const formatted = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+        const matchCol = item.matchCount !== null ? `\t${item.matchCount}` : '';
+        return `${item.globalIdx}\t${formatted}\t${item.ticket.join('\t')}${matchCol}`;
+      })
+      .join('\n');
+
+    const success = await copyTextToClipboard(`${header}\n${text}`);
+    if (success) {
+      setCopiedForSheets(true);
+      setTimeout(() => setCopiedForSheets(false), 2500);
+    }
+  };
+
+  // 4. Copy 1-Column Format (e.g. "01, 02, 03, 04, 05, 06\n01, 02, ...")
+  const handleCopySingleColumn = async (onlyCurrentTab: boolean = false) => {
     const exportItems = onlyCurrentTab
       ? filteredTickets
       : tickets.map((t, idx) => ({ ticket: t, globalIdx: idx + 1, matchCount: null }));
@@ -167,28 +234,22 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     const text = exportItems
       .map((item) => item.ticket.map((n) => String(n).padStart(2, '0')).join(', '))
       .join('\n');
-    navigator.clipboard.writeText(text);
-    setCopiedSingleCol(true);
-    setTimeout(() => setCopiedSingleCol(false), 2000);
+
+    const success = await copyTextToClipboard(text);
+    if (success) {
+      setCopiedSingleCol(true);
+      setTimeout(() => setCopiedSingleCol(false), 2000);
+    }
   };
 
-  const handleCopyClipboard = (onlyCurrentTab: boolean = false) => {
-    const exportList = onlyCurrentTab ? filteredTickets : tickets.map((t, idx) => ({ ticket: t, globalIdx: idx + 1, matchCount: null }));
-    if (exportList.length === 0) return;
-
-    const text = exportList
-      .map((item) => `Ticket #${item.globalIdx}: ${item.ticket.map((n) => String(n).padStart(2, '0')).join(', ')}`)
-      .join('\n');
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleCopySingleTicket = (ticket: number[], idx: number) => {
+  // 5. Copy single ticket
+  const handleCopySingleTicket = async (ticket: number[], idx: number) => {
     const text = ticket.map((n) => String(n).padStart(2, '0')).join(', ');
-    navigator.clipboard.writeText(text);
-    setCopiedTicketId(idx);
-    setTimeout(() => setCopiedTicketId(null), 1500);
+    const success = await copyTextToClipboard(text);
+    if (success) {
+      setCopiedTicketId(idx);
+      setTimeout(() => setCopiedTicketId(null), 1500);
+    }
   };
 
   if (tickets.length === 0) {
@@ -197,7 +258,7 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
         <TicketIcon className="w-10 h-10 text-slate-500 mx-auto mb-3" />
         <h3 className="text-sm font-semibold text-slate-300">No Tickets Generated</h3>
         <p className="text-xs text-slate-500 mt-1">
-          Configure parameters and click &ldquo;Start Optimization&rdquo; to generate your ticket set.
+          প্যারামিটার কনফিগার করে &ldquo;Calculate Minimum Tickets&rdquo; বাটনে ক্লিক করে টিকিট শিট তৈরি করুন।
         </p>
       </div>
     );
@@ -207,96 +268,175 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
   const matchTabsList = Array.from({ length: resultSize + 1 }, (_, i) => resultSize - i);
 
   return (
-    <div id="tickets-section" className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-5 shadow-lg backdrop-blur-sm space-y-4">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-700/70 gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg">
-            <TicketIcon className="w-5 h-5" />
+    <div id="tickets-sheet-section" className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-5 shadow-2xl backdrop-blur-sm space-y-4">
+      {/* Top Header Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-slate-700/80 gap-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30 shadow-inner">
+            <FileSpreadsheet className="w-6 h-6 text-emerald-400" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-bold text-white">Generated Tickets Matrix</h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-                {tickets.length.toLocaleString()} total tickets
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-base sm:text-lg font-black text-white tracking-tight">
+                Generated Tickets Sheet &amp; Table
+              </h2>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40">
+                মোট {tickets.length.toLocaleString()}টি টিকিট
+              </span>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 font-mono font-semibold">
+                Google Sheets Ready
               </span>
             </div>
-            <p className="text-xs text-slate-400">
-              সকল ড্র-এর বিপরীতে গ্যারান্টিযুক্ত টিকিট সেট (যেকোনো ড্র টেস্ট করে ম্যাচ অনুযায়ী ফিল্টার করুন)
+            <p className="text-xs text-slate-400 mt-0.5">
+              সম্পূর্ণ গাণিতিক কাভারেজযুক্ত টিকিটের তালিকা। সরাসরি গুগল শিটে পেস্ট করতে বা স্প্রেডশিটে ডাউনলোড করতে নিচের বাটনগুলো ব্যবহার করুন।
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Copy 1-Column Format (Directly ready to paste into 1 column of Google Sheets / Excel) */}
-          <button
-            type="button"
-            onClick={() => handleCopySingleColumn(currentTab !== 'all')}
-            className="flex items-center gap-1.5 text-xs bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 px-3 py-1.5 rounded-lg border border-emerald-500/40 transition-colors cursor-pointer font-semibold shadow-sm"
-            title="১টি কলামে লাইন বাই লাইন পুরো টিকেট কপি করুন (সহজে শিটে পেস্ট করার জন্য)"
-          >
-            {copiedSingleCol ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            {copiedSingleCol ? 'Copied 1-Col!' : currentTab !== 'all' ? `Copy 1-Col (${currentTab}-Match)` : 'Copy 1-Column List'}
-          </button>
+        {/* View Mode Toggle & Primary Actions */}
+        <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+          {/* View Mode Switcher: Sheet View vs Ball Cards */}
+          <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-700/80 shadow-inner">
+            <button
+              type="button"
+              onClick={() => setViewMode('sheet')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'sheet'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="স্প্রেডশিট / এক্সেল টেবিল ভিউ (কলাম ও রো আকারে)"
+            >
+              <Table className="w-3.5 h-3.5" />
+              <span>Sheet View (শিট টেবিল)</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => handleCopyClipboard(currentTab !== 'all')}
-            className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer"
-            title={currentTab !== 'all' ? `Copy only ${currentTab}-match tickets with ID` : 'Copy all tickets with ID'}
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? 'Copied!' : 'Copy with #ID'}
-          </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'grid'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="লটারি বল ও কার্ড ভিউ"
+            >
+              <Grid className="w-3.5 h-3.5" />
+              <span>Ball Cards (বল ভিউ)</span>
+            </button>
+          </div>
 
+          {/* PRIMARY: Google Sheets CSV Download */}
           <button
             type="button"
             onClick={() => handleDownloadCSV(currentTab !== 'all')}
-            className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-3 py-1.5 rounded-lg shadow transition-colors cursor-pointer"
-            title="Download CSV (শিটের কলাম B-তে পুরো টিকেট নম্বর ১টি সেলে থাকবে)"
+            className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl shadow-lg hover:shadow-emerald-600/30 transition-all cursor-pointer"
+            title="Download clean CSV of tickets directly formatted for Google Sheets or Excel"
           >
-            <Download className="w-3.5 h-3.5" />
-            {currentTab !== 'all' ? `Download ${currentTab}-Match CSV` : 'Download CSV (1-Col Sheet)'}
+            <Download className="w-3.5 h-3.5 text-emerald-100" />
+            <span>{currentTab !== 'all' ? `Sheets CSV (${currentTab}-Match)` : 'Google Sheets CSV (ডাউনলোড)'}</span>
+          </button>
+
+          {/* Direct Copy for Google Sheets (Paste with Ctrl+V) */}
+          <button
+            type="button"
+            onClick={() => handleCopyForGoogleSheets(currentTab !== 'all')}
+            className="flex items-center gap-1.5 text-xs bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 hover:text-white px-3 py-2 rounded-xl border border-indigo-500/50 transition-colors cursor-pointer font-bold shadow-sm"
+            title="গুগল শিটে সরাসরি কলামে পেস্ট করতে ক্লিক করুন (Ctrl+V)"
+          >
+            {copiedForSheets ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedForSheets ? 'শিটের জন্য কপি সম্পন্ন!' : 'শিটে পেস্ট করতে কপি (Ctrl+V)'}</span>
+          </button>
+
+          {/* Secondary Options: TSV & 1-Col dropdown / buttons */}
+          <button
+            type="button"
+            onClick={() => handleDownloadTSV(currentTab !== 'all')}
+            className="flex items-center gap-1 text-xs bg-slate-900 hover:bg-slate-700 text-slate-300 px-2.5 py-2 rounded-xl border border-slate-700 transition-colors cursor-pointer font-mono"
+            title="Download Excel / TSV Tab-Separated file"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-cyan-400" />
+            <span>TSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleCopySingleColumn(currentTab !== 'all')}
+            className="flex items-center gap-1 text-xs bg-slate-900 hover:bg-slate-700 text-slate-300 px-2.5 py-2 rounded-xl border border-slate-700 transition-colors cursor-pointer"
+            title="১টি কলামে লাইন বাই লাইন পুরো টিকেট কপি করুন"
+          >
+            {copiedSingleCol ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+            <span>{copiedSingleCol ? 'কপি হয়েছে' : '1-Col'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowSheetsGuide(!showSheetsGuide)}
+            className="p-2 text-slate-400 hover:text-white bg-slate-900 border border-slate-700 rounded-xl cursor-pointer"
+            title="গুগল শিটে কীভাবে সহজে নিবেন (গাইড)"
+          >
+            <HelpCircle className="w-4 h-4 text-cyan-400" />
           </button>
         </div>
       </div>
 
-      {/* Explanation Banner (Why so many tickets for 100% full universe covering vs single draw) */}
-      <div className="bg-slate-950/70 border border-indigo-500/30 rounded-xl p-3.5 text-xs text-slate-300">
-        <div
-          className="flex items-center justify-between cursor-pointer select-none"
-          onClick={() => setShowExplanation(!showExplanation)}
-        >
-          <div className="flex items-center gap-2 text-indigo-300 font-semibold">
-            <HelpCircle className="w-4 h-4 text-indigo-400 shrink-0" />
-            <span>কেন মোট {tickets.length.toLocaleString()}টি টিকিট এসেছে এবং ড্র-তে কীভাবে ম্যাচ কাজ করে?</span>
+      {/* Google Sheets 1-Click Guide Callout (if opened) */}
+      {showSheetsGuide && (
+        <div className="bg-gradient-to-r from-emerald-950/40 via-slate-900 to-indigo-950/40 border border-emerald-500/40 rounded-xl p-4 text-xs space-y-2 animate-in fade-in">
+          <div className="flex items-center justify-between pb-1 border-b border-emerald-500/20">
+            <span className="font-bold text-emerald-300 flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              গুগল শিট (Google Sheets)-এ টিকেট নেওয়ার ৩টি সহজ উপায়:
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowSheetsGuide(false)}
+              className="text-slate-400 hover:text-white"
+            >
+              &times;
+            </button>
           </div>
-          <button type="button" className="text-slate-400 hover:text-white p-1">
-            {showExplanation ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1 text-[11px] leading-relaxed">
+            <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 space-y-1">
+              <span className="font-bold text-amber-300 block">উপায় ১: সরাসরি পেস্ট (Fastest)</span>
+              <p className="text-slate-300">
+                ১. উপরের <b>&ldquo;শিটে পেস্ট করতে কপি (Ctrl+V)&rdquo;</b> বাটনে ক্লিক করুন।
+              </p>
+              <p className="text-slate-300">
+                ২. নতুন গুগল শিট খুলুন (ব্রাউজারে <code>sheets.new</code> লিখুন)।
+              </p>
+              <p className="text-slate-300">
+                ৩. সেল A1-এ রেখে <b>Ctrl + V</b> চাপুন। সকল টিকেট স্বয়ংক্রিয়ভাবে আলাদা কলামে বসে যাবে!
+              </p>
+            </div>
+            <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 space-y-1">
+              <span className="font-bold text-emerald-300 block">উপায় ২: CSV ডাউনলোড</span>
+              <p className="text-slate-300">
+                ১. <b>&ldquo;Google Sheets CSV&rdquo;</b> বাটনে ক্লিক করে ফাইলটি ডাউনলোড করুন।
+              </p>
+              <p className="text-slate-300">
+                ২. Google Sheets-এ গিয়ে <b>File &rarr; Import &rarr; Upload</b> দিয়ে ফাইলটি সিলেক্ট করুন।
+              </p>
+              <p className="text-slate-300">
+                ৩. সুন্দর ফরমেটে পুরো টিকিট শিট ওপেন হবে।
+              </p>
+            </div>
+            <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 space-y-1">
+              <span className="font-bold text-cyan-300 block">উপায় ৩: TSV বা ১-কলাম কপি</span>
+              <p className="text-slate-300">
+                আপনার যদি একটি কলামে সব টিকিট দরকার হয়, তবে <b>&ldquo;1-Col&rdquo;</b> বাটনে ক্লিক করলে প্রতি লাইনে ১টি করে টিকিট কপি হয়ে যাবে।
+              </p>
+            </div>
+          </div>
         </div>
+      )}
 
-        {showExplanation && (
-          <div className="mt-2.5 pt-2.5 border-t border-slate-800 space-y-1.5 text-[11px] leading-relaxed text-slate-300">
-            <p>
-              • <b className="text-emerald-400">১০০% গ্যারান্টি (Full Universe Wheel):</b> লটারিতে ১–২৭ নম্বরের মধ্যে মোট <b>২৯৬,০১০টি</b> সম্ভাব্য ড্র হতে পারে। ১টি টিকিট মাত্র ১২৬টি ভিন্ন ড্র-এর সাথে ৫-ম্যাচ দিতে পারে। ভবিষ্যতের <b>যেকোনো অজানা ড্র</b> আসুক না কেন, কোনো মিস ছাড়া অন্তত ১টি ৫-ম্যাচ নিশ্চিত করতেই সম্পূর্ণ গাণিতিক কাভারেজে মোট {tickets.length.toLocaleString()}টি টিকিটের প্রয়োজন হয়।
-            </p>
-            <p>
-              • <b className="text-amber-300">নির্দিষ্ট ড্র-এর ক্ষেত্রে ম্যাচ বণ্টন:</b> লটারির যেকোনো <b>একটি ড্র-তে</b> সব টিকিট একই সাথে ৫-ম্যাচ করে না। কিছু টিকিট ৫ মিলবে, কিছু ৪, কিছু ৩, এবং বাকিগুলো ২ বা ১ মিলবে।
-            </p>
-            <p>
-              • <b className="text-cyan-300">ট্যাব নির্বাচন করুন:</b> বর্তমান টেস্ট ড্র-এর জন্য ঠিক কোন টিকিটগুলো ৫-ম্যাচ করেছে তা দেখতে নিচের <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 font-bold border border-amber-400/40">5 Matches</span> ট্যাবে ক্লিক করুন!
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* MATCH TABS (5 Match, 4 Match, 3 Match, 2 Match, 1 Match, 0 Match, All) */}
+      {/* Match Filter Tabs Row */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
             <Filter className="w-3.5 h-3.5 text-cyan-400" />
-            ম্যাচ অনুযায়ী টিকিট ফিল্টার করুন (Match Tabs):
+            ম্যাচ অনুযায়ী ফিল্টার (Match Tabs):
           </span>
           {highlightNumbers.length > 0 && (
             <span className="text-[11px] text-slate-400 font-mono">
@@ -305,7 +445,6 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
           )}
         </div>
 
-        {/* Tab Buttons Row */}
         <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-950/90 rounded-xl border border-slate-800">
           {/* All Tickets Tab */}
           <button
@@ -317,7 +456,7 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
                 : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-700/60'
             }`}
           >
-            <span>All Tickets</span>
+            <span>All Tickets (সকল টিকিট)</span>
             <span className="px-1.5 py-0.2 rounded-full bg-black/40 text-[10px] font-mono">
               {tickets.length.toLocaleString()}
             </span>
@@ -329,7 +468,6 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
             const isSelected = currentTab === k;
             const hasMatches = count > 0;
 
-            // Visual styling based on match tier
             let activeColor = 'bg-slate-700 text-white ring-2 ring-slate-400/40';
             let badgeBg = 'bg-slate-800 text-slate-300';
             let icon = null;
@@ -377,41 +515,70 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
+      {/* Filter and Search Bar with Page Size Selector */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search specific numbers (e.g. 1, 6, 14)..."
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value);
-              setPage(1);
-            }}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
-          />
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-1">
+          <div className="relative w-full sm:w-72">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search numbers (e.g. 1, 6, 14)..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setPage(1);
+              }}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+            />
+          </div>
+
+          {/* Rows per page selector */}
+          <div className="flex items-center gap-1 text-xs text-slate-400 shrink-0">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500" />
+            <span className="hidden sm:inline">Rows:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(parseInt(e.target.value, 10));
+                setPage(1);
+              }}
+              className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value={25}>25 rows</option>
+              <option value={50}>50 rows</option>
+              <option value={100}>100 rows</option>
+              <option value={250}>250 rows</option>
+              <option value={500}>500 rows</option>
+              <option value={0}>All rows</option>
+            </select>
+          </div>
         </div>
 
-        {/* Tab Status Summary */}
-        <div className="text-xs text-slate-300">
-          {currentTab === 'all' ? (
-            <span>মোট টিকিট: <b className="text-white font-mono">{filteredTickets.length.toLocaleString()}</b> টি</span>
-          ) : (
-            <span>
-              <b className="text-amber-400 font-mono">{currentTab}-ম্যাচ</b> প্রাপ্ত টিকিট:{' '}
-              <b className="text-emerald-400 font-mono">{filteredTickets.length.toLocaleString()}</b> টি
-            </span>
-          )}
+        {/* Total Summary */}
+        <div className="text-xs text-slate-300 shrink-0">
+          <span>
+            প্রদর্শিত হচ্ছে:{' '}
+            <b className="text-emerald-400 font-mono">{filteredTickets.length.toLocaleString()}</b> টি টিকিট
+            {filteredTickets.length < tickets.length && ` (মোট ${tickets.length.toLocaleString()}টি থেকে)`}
+          </span>
         </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
+        {/* Pagination Controls */}
+        {pageSize !== 0 && totalPages > 1 && (
+          <div className="flex items-center gap-2 text-xs text-slate-400 shrink-0">
             <span>
-              Page {page} of {totalPages}
+              Page <b className="text-slate-200 font-mono">{page}</b> of <b className="text-slate-200 font-mono">{totalPages}</b>
             </span>
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage(1)}
+                disabled={page <= 1}
+                className="px-2 py-1 bg-slate-900 border border-slate-700 rounded hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-slate-300 font-mono text-[11px]"
+                title="First Page"
+              >
+                &laquo;
+              </button>
               <button
                 type="button"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -428,127 +595,271 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
               >
                 Next
               </button>
+              <button
+                type="button"
+                onClick={() => setPage(totalPages)}
+                disabled={page >= totalPages}
+                className="px-2 py-1 bg-slate-900 border border-slate-700 rounded hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer text-slate-300 font-mono text-[11px]"
+                title="Last Page"
+              >
+                &raquo;
+              </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Current Match Banner when viewing a specific match tab */}
-      {currentTab !== 'all' && (
-        <div className={`p-2.5 rounded-lg border text-xs flex items-center justify-between ${
-          currentTab >= 5
-            ? 'bg-amber-950/40 border-amber-500/50 text-amber-200'
-            : currentTab === 4
-            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
-            : 'bg-slate-900 border-slate-700 text-slate-300'
-        }`}>
-          <div className="flex items-center gap-2">
-            {currentTab >= 5 ? <Trophy className="w-4 h-4 text-amber-400" /> : <Filter className="w-4 h-4 text-cyan-400" />}
-            <span>
-              বর্তমান টেস্ট ড্র-এর বিপরীতে <b>{currentTab}টি নম্বর হুবহু মিলে যাওয়া টিকিটসমূহ</b> প্রদর্শিত হচ্ছে (মোট {filteredTickets.length}টি)।
-            </span>
+      {/* SPREADSHEET TABLE VIEW (SHEET VIEW) */}
+      {viewMode === 'sheet' && (
+        <div className="border border-slate-700/80 rounded-xl overflow-hidden shadow-inner bg-slate-950/60">
+          <div className="max-h-[560px] overflow-x-auto overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700">
+            <table className="w-full text-left text-xs text-slate-300 border-collapse">
+              <thead className="bg-[#0c1222] text-[11px] text-slate-400 uppercase font-mono tracking-wider sticky top-0 z-10 border-b border-slate-700/90 shadow-sm">
+                <tr>
+                  <th className="py-2.5 px-3 border-r border-slate-800 w-16 text-center font-bold">
+                    Ticket #
+                  </th>
+                  <th className="py-2.5 px-4 border-r border-slate-800 font-bold min-w-[200px]">
+                    Full Combination (সম্পূর্ণ টিকিট)
+                  </th>
+                  {Array.from({ length: ticketSize }, (_, i) => (
+                    <th key={i} className="py-2.5 px-2 border-r border-slate-800 text-center w-12 font-bold text-slate-300">
+                      N{i + 1}
+                    </th>
+                  ))}
+                  {ticketMatches && (
+                    <th className="py-2.5 px-3 border-r border-slate-800 text-center w-28 font-bold text-cyan-300">
+                      Match Count
+                    </th>
+                  )}
+                  <th className="py-2.5 px-3 text-center w-20 font-bold">
+                    Copy
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/80 font-mono text-xs">
+                {currentTickets.length === 0 ? (
+                  <tr>
+                    <td colSpan={ticketSize + 4} className="py-8 text-center text-slate-500 italic font-sans">
+                      কোনো টিকিট পাওয়া যায়নি। ফিল্টার রিসেট করুন।
+                    </td>
+                  </tr>
+                ) : (
+                  currentTickets.map((item, rowIdx) => {
+                    const { ticket, globalIdx, matchCount } = item;
+                    const isJackpot = matchCount !== null && matchCount >= resultSize - 1;
+                    const formattedComma = ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+
+                    return (
+                      <tr
+                        key={globalIdx}
+                        className={`hover:bg-indigo-950/40 transition-colors ${
+                          isJackpot
+                            ? 'bg-amber-950/20 hover:bg-amber-950/40'
+                            : rowIdx % 2 === 0
+                            ? 'bg-slate-900/50'
+                            : 'bg-slate-950/40'
+                        }`}
+                      >
+                        {/* Ticket Number */}
+                        <td className="py-2 px-3 border-r border-slate-800/80 text-center font-bold text-slate-400">
+                          #{globalIdx}
+                        </td>
+
+                        {/* Full Combination */}
+                        <td className="py-2 px-4 border-r border-slate-800/80 font-mono font-bold text-slate-100 flex items-center justify-between gap-2">
+                          <span className="tracking-wide">{formattedComma}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopySingleTicket(ticket, globalIdx)}
+                            className="p-1 text-slate-500 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="এই টিকিট নম্বর কপি করুন"
+                          >
+                            {copiedTicketId === globalIdx ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </td>
+
+                        {/* Individual Number Columns (Ball 1 to Ball K) */}
+                        {ticket.map((num, i) => {
+                          const isHit = highlightSet.has(num);
+                          return (
+                            <td
+                              key={i}
+                              className={`py-2 px-1 border-r border-slate-800/80 text-center font-mono ${
+                                isHit
+                                  ? 'bg-amber-400 text-slate-950 font-black shadow-inner'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {String(num).padStart(2, '0')}
+                            </td>
+                          );
+                        })}
+
+                        {/* Match Count Badge */}
+                        {ticketMatches && (
+                          <td className="py-2 px-3 border-r border-slate-800/80 text-center">
+                            {matchCount !== null && (
+                              <span
+                                className={`inline-block text-[11px] font-bold font-mono px-2 py-0.5 rounded border ${
+                                  matchCount >= 5
+                                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 ring-1 ring-amber-400/40'
+                                    : matchCount === 4
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                    : matchCount === 3
+                                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                                    : matchCount === 2
+                                    ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                                }`}
+                              >
+                                {matchCount} {matchCount === 1 ? 'Match' : 'Matches'}
+                              </span>
+                            )}
+                          </td>
+                        )}
+
+                        {/* Quick Copy Action */}
+                        <td className="py-2 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleCopySingleTicket(ticket, globalIdx)}
+                            className="text-xs text-indigo-400 hover:text-indigo-200 underline cursor-pointer"
+                          >
+                            {copiedTicketId === globalIdx ? 'Copied' : 'Copy'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
-          <button
-            type="button"
-            onClick={() => setTab('all')}
-            className="text-[11px] underline hover:text-white cursor-pointer"
-          >
-            Show All Tickets &times;
-          </button>
+
+          {/* Sheet Footer summary */}
+          <div className="bg-[#0a0f1c] px-4 py-2.5 border-t border-slate-800 text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-2">
+            <span>
+              মোট কলাম: <b className="text-slate-200">{ticketSize + 2}টি</b> (Ticket #, Full Ticket, N1..N{ticketSize}) | মোট ডাটা রো:{' '}
+              <b className="text-emerald-400 font-mono">{filteredTickets.length.toLocaleString()}</b> টি
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleCopyForGoogleSheets(currentTab !== 'all')}
+                className="text-indigo-400 hover:text-indigo-300 underline font-semibold cursor-pointer"
+              >
+                সম্পূর্ণ শিট কপি করুন (Ctrl+V)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDownloadCSV(currentTab !== 'all')}
+                className="text-emerald-400 hover:text-emerald-300 underline font-semibold cursor-pointer"
+              >
+                Google Sheets CSV ডাউনলোড
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Tickets Grid Display */}
-      {filteredTickets.length === 0 ? (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-xs">
-          এই ফিল্টারে কোনো টিকিট পাওয়া যায়নি।
-          <button
-            type="button"
-            onClick={() => {
-              setTab('all');
-              setSearchTerm('');
-            }}
-            className="block mx-auto mt-2 text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
-          >
-            রিসেট করে সকল টিকিট দেখুন
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 max-h-[520px] overflow-y-auto pr-1">
-          {currentTickets.map((item) => {
-            const { ticket, globalIdx, matchCount } = item;
-            const isJackpot = matchCount !== null && matchCount >= resultSize - 1;
-
-            return (
-              <div
-                key={globalIdx}
-                className={`flex items-center justify-between rounded-lg p-2.5 transition-all ${
-                  isJackpot
-                    ? 'bg-gradient-to-r from-amber-950/60 to-slate-900 border border-amber-500/60 shadow-sm'
-                    : 'bg-slate-900/80 border border-slate-700/60 hover:border-slate-600'
-                }`}
+      {/* BALL CARDS GRID VIEW */}
+      {viewMode === 'grid' && (
+        <>
+          {filteredTickets.length === 0 ? (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-xs">
+              এই ফিল্টারে কোনো টিকিট পাওয়া যায়নি।
+              <button
+                type="button"
+                onClick={() => {
+                  setTab('all');
+                  setSearchTerm('');
+                }}
+                className="block mx-auto mt-2 text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
               >
-                <span className="text-[11px] font-mono text-slate-400 w-11 shrink-0 font-semibold">
-                  #{globalIdx}
-                </span>
+                রিসেট করে সকল টিকিট দেখুন
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5 max-h-[520px] overflow-y-auto pr-1">
+              {currentTickets.map((item) => {
+                const { ticket, globalIdx, matchCount } = item;
+                const isJackpot = matchCount !== null && matchCount >= resultSize - 1;
 
-                {/* Number Balls */}
-                <div className="flex flex-wrap items-center gap-1.5 justify-end">
-                  {ticket.map((num) => {
-                    const isHit = highlightSet.has(num);
-                    return (
-                      <span
-                        key={num}
-                        className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-all ${
-                          isHit
-                            ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-300 scale-105 shadow-sm font-black'
-                            : 'bg-slate-800 text-slate-200 border border-slate-700'
-                        }`}
-                      >
-                        {String(num).padStart(2, '0')}
-                      </span>
-                    );
-                  })}
-                </div>
-
-                <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                  {/* Match Badge */}
-                  {matchCount !== null && (
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                        matchCount >= 5
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 ring-1 ring-amber-400/30'
-                          : matchCount === 4
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                          : matchCount === 3
-                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                          : matchCount === 2
-                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                          : 'bg-slate-800 text-slate-400 border-slate-700'
-                      }`}
-                    >
-                      {matchCount} {matchCount === 1 ? 'match' : 'matches'}
-                    </span>
-                  )}
-
-                  {/* Individual Ticket Copy Icon */}
-                  <button
-                    type="button"
-                    onClick={() => handleCopySingleTicket(ticket, globalIdx)}
-                    className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
-                    title="এই পুরো টিকেট নম্বর কপি করুন"
+                return (
+                  <div
+                    key={globalIdx}
+                    className={`flex items-center justify-between rounded-lg p-2.5 transition-all ${
+                      isJackpot
+                        ? 'bg-gradient-to-r from-amber-950/60 to-slate-900 border border-amber-500/60 shadow-sm'
+                        : 'bg-slate-900/80 border border-slate-700/60 hover:border-slate-600'
+                    }`}
                   >
-                    {copiedTicketId === globalIdx ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                    <span className="text-[11px] font-mono text-slate-400 w-11 shrink-0 font-semibold">
+                      #{globalIdx}
+                    </span>
+
+                    {/* Number Balls */}
+                    <div className="flex flex-wrap items-center gap-1.5 justify-end">
+                      {ticket.map((num) => {
+                        const isHit = highlightSet.has(num);
+                        return (
+                          <span
+                            key={num}
+                            className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold transition-all ${
+                              isHit
+                                ? 'bg-amber-400 text-slate-950 ring-2 ring-amber-300 scale-105 shadow-sm font-black'
+                                : 'bg-slate-800 text-slate-200 border border-slate-700'
+                            }`}
+                          >
+                            {String(num).padStart(2, '0')}
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {matchCount !== null && (
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            matchCount >= 5
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 ring-1 ring-amber-400/30'
+                              : matchCount === 4
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                              : matchCount === 3
+                              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                              : matchCount === 2
+                              ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}
+                        >
+                          {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopySingleTicket(ticket, globalIdx)}
+                        className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="এই পুরো টিকেট নম্বর কপি করুন"
+                      >
+                        {copiedTicketId === globalIdx ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
