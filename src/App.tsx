@@ -8,13 +8,13 @@ import { VerificationReportView } from './components/VerificationReportView';
 import { ResultSimulator } from './components/ResultSimulator';
 import { optimizeWithConstraintGeneration } from './lib/solver';
 import {
-  Sparkles,
-  Play,
+  ShieldCheck,
+  Rocket,
   RotateCcw,
-  HelpCircle,
-  AlertOctagon,
-  Clock,
   Cpu,
+  Sliders,
+  AlertTriangle,
+  Zap,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -26,13 +26,14 @@ export const App: React.FC = () => {
   });
 
   const [targets, setTargets] = useState<TargetMap>({
-    3: 1,
-    2: 3,
+    4: 1,
+    3: 3,
   });
 
   const [timeLimit, setTimeLimit] = useState<number>(60);
   const [isSolving, setIsSolving] = useState<boolean>(false);
   const [progressStatus, setProgressStatus] = useState<string>('');
+  const [progressPercent, setProgressPercent] = useState<number>(0);
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeDrawnResult, setActiveDrawnResult] = useState<number[]>([]);
@@ -55,16 +56,16 @@ export const App: React.FC = () => {
   const handleStartOptimization = async () => {
     setErrorMsg(null);
     if (Object.keys(targets).length === 0) {
-      setErrorMsg('Please specify at least one exact-match target (e.g. Exact 3 >= 1).');
+      setErrorMsg('Please specify at least one compound target (e.g. Exact 4 Match >= 1).');
       return;
     }
 
     setIsSolving(true);
+    setProgressPercent(10);
     setProgressStatus('Initializing solver and generating combination candidate space...');
 
     try {
-      // Yield to allow React to update UI before intensive crunching
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 60));
 
       const optResult = await optimizeWithConstraintGeneration(
         config.numberFrom,
@@ -74,14 +75,18 @@ export const App: React.FC = () => {
         targets,
         {
           timeLimitSeconds: timeLimit,
-          seedConstraintCount: 20,
+          seedConstraintCount: 25,
           maxRounds: 60,
           onProgress: (info) => {
             setProgressStatus(info.status);
+            // approximate progress percentage based on rounds
+            const pct = Math.min(95, Math.max(15, info.round * 12));
+            setProgressPercent(pct);
           },
         }
       );
 
+      setProgressPercent(100);
       setResult(optResult);
       if (optResult.verification?.worstCaseOverallResult) {
         setActiveDrawnResult(optResult.verification.worstCaseOverallResult);
@@ -101,65 +106,163 @@ export const App: React.FC = () => {
     setResult(null);
     setErrorMsg(null);
     setActiveDrawnResult([]);
+    setProgressPercent(0);
   };
 
   const maxK = Math.min(config.ticketSize, config.resultSize);
+  const activeTargetEntries = Object.entries(targets)
+    .map(([k, min]) => ({ k: Number(k), min }))
+    .sort((a, b) => b.k - a.k);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
-      {/* Header Bar */}
-      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 shadow-md">
+    <div className="min-h-screen bg-[#070b14] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+      {/* Top Banner exactly formatted like client screenshot */}
+      <header className="border-b border-slate-800/80 bg-[#090d18] sticky top-0 z-30 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-400 flex items-center justify-center shadow-indigo-500/25 shadow-lg">
-              <Sparkles className="w-5 h-5 text-white" />
+            <div className="w-9 h-9 rounded-lg bg-rose-600/20 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <ShieldCheck className="w-5 h-5 text-rose-400" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                  Universal Lottery Optimizer
+              <div className="flex items-center gap-2.5">
+                <h1 className="text-base sm:text-lg font-extrabold text-white tracking-tight">
+                  Universal Lottery / Combination Optimizer
                 </h1>
-                <span className="text-[10px] uppercase font-semibold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                  Exact Guarantee
-                </span>
               </div>
               <p className="text-xs text-slate-400">
-                100% Worst-Case Mathematical Guarantee &bull; Exhaustive Verification Across All Results
+                Complete Guaranteed Cover Engine &amp; 100% Exhaustive Combinatorial Verification (HiGHS, Integer Programming)
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400 flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
-              <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Engine: Exact Cutting-Planes &bull; 64-bit SWAR Oracle &bull; Deepest-Cut IP</span>
+            <span className="text-[11px] font-mono tracking-wider text-cyan-400 bg-cyan-950/40 border border-cyan-500/30 px-3 py-1 rounded-full uppercase font-bold">
+              100% Exhaustive Guarantee &bull; Zero Miss
             </span>
           </div>
         </div>
       </header>
 
-      {/* Main Body */}
+      {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full space-y-6">
-        {/* Error Banner */}
+        {/* Error Alert */}
         {errorMsg && (
           <div className="bg-rose-950/80 border border-rose-500/50 rounded-xl p-4 flex items-start gap-3 text-rose-200 text-xs shadow-lg animate-in fade-in">
-            <AlertOctagon className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <span className="font-bold text-rose-300">Optimization Error: </span>
+              <span className="font-bold text-rose-300">Optimization Notice: </span>
               {errorMsg}
             </div>
             <button
               onClick={() => setErrorMsg(null)}
-              className="text-rose-400 hover:text-white font-bold ml-2"
+              className="text-rose-400 hover:text-white font-bold ml-2 cursor-pointer"
             >
               &times;
             </button>
           </div>
         )}
 
-        {/* Input Configuration Grid */}
+        {/* Active Requirements Bar (Prominent Banner from client screenshot) */}
+        <div className="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-4 shadow-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                Active Compound Requirements:
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {activeTargetEntries.length === 0 ? (
+                  <span className="text-xs text-amber-400">No targets specified yet</span>
+                ) : (
+                  activeTargetEntries.map(({ k, min }) => (
+                    <span
+                      key={k}
+                      className="text-xs font-bold font-mono px-3 py-1 rounded-md bg-indigo-950 border border-indigo-500/40 text-cyan-300 shadow-sm"
+                    >
+                      Exact {k}-Match &ge; {min}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Sliders className="w-3.5 h-3.5 text-slate-500" />
+                <span>Time Limit:</span>
+                <select
+                  value={timeLimit}
+                  onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
+                  disabled={isSolving}
+                  className="bg-slate-950 border border-slate-700 text-xs text-white rounded px-2 py-1 font-mono cursor-pointer"
+                >
+                  <option value={15}>15s</option>
+                  <option value={30}>30s</option>
+                  <option value={60}>60s</option>
+                  <option value={120}>120s</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Button Bar like screenshot */}
+          <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row items-center gap-3">
+            <button
+              type="button"
+              onClick={handleStartOptimization}
+              disabled={isSolving}
+              className="w-full sm:flex-1 flex items-center justify-center gap-2 py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all text-sm disabled:opacity-50 cursor-pointer"
+            >
+              <Rocket className="w-4 h-4 fill-slate-950" />
+              {isSolving ? 'Optimizing Combination Space...' : 'Start Combinatorial Optimization'}
+            </button>
+
+            {result && (
+              <button
+                type="button"
+                onClick={handleReset}
+                className="w-full sm:w-auto flex items-center justify-center gap-1.5 py-3 px-5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Reset Results
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Progress & Auditing Terminal Box (Matches client screenshot) */}
+        {isSolving && (
+          <div className="bg-slate-900/90 border border-cyan-500/40 rounded-xl p-4 shadow-xl space-y-3 animate-in fade-in">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-cyan-400 flex items-center gap-1.5">
+                <Zap className="w-4 h-4 animate-bounce" />
+                Phase: ITERATIVE CUTTING-PLANES &bull; SEPARATION ORACLE
+              </span>
+              <span className="font-mono font-bold text-cyan-300">{progressPercent}%</span>
+            </div>
+
+            {/* Progress bar */}
+            <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+              <div
+                className="bg-emerald-500 h-full transition-all duration-300 rounded-full shadow-sm shadow-emerald-500/50"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+
+            {/* Auditing status terminal output */}
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs text-slate-300 space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[11px] pb-1 border-b border-slate-800">
+                <span>Auditing Engine: 64-bit SWAR Popcount Oracle</span>
+                <span className="text-emerald-400 font-bold">100% Exhaustive Verification</span>
+              </div>
+              <p className="text-indigo-300 pt-1">{progressStatus || 'Running cutting plane rounds...'}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Two-Column Grid: Universe Game Matrix & Compound Target Requirements */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-6 space-y-6">
+          {/* Left Column: Game Universe Config */}
+          <div className="lg:col-span-5 space-y-6">
             <GameConfigForm
               config={config}
               onChange={setConfig}
@@ -167,6 +270,31 @@ export const App: React.FC = () => {
               disabled={isSolving}
             />
 
+            {/* Engine Settings card */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs space-y-3 shadow-lg">
+              <div className="flex items-center gap-2 text-slate-200 font-bold uppercase tracking-wider text-[11px]">
+                <Cpu className="w-4 h-4 text-indigo-400" />
+                <span>Optimization Engine Settings</span>
+              </div>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1 text-slate-400 text-[11px]">
+                <div className="flex justify-between">
+                  <span>Optimization Engine:</span>
+                  <span className="font-semibold text-slate-200">HiGHS / Mixed-Integer LP</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Cover Guarantee:</span>
+                  <span className="font-semibold text-emerald-400">100% Zero-Miss Guarantee</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Proof Certification:</span>
+                  <span className="font-semibold text-indigo-300">PROVED OPTIMAL / BEST FOUND</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Compound Target Requirements (4 কয়টা, 5 কয়টা win নিবেন) */}
+          <div className="lg:col-span-7 space-y-6">
             <TargetsMatrix
               maxK={maxK}
               targets={targets}
@@ -174,112 +302,11 @@ export const App: React.FC = () => {
               disabled={isSolving}
             />
           </div>
-
-          <div className="lg:col-span-6 space-y-6">
-            {/* Solver Controls Card */}
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-5 shadow-lg backdrop-blur-sm">
-              <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-700/70">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg">
-                    <Play className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-semibold text-white">Solver Controls</h2>
-                    <p className="text-xs text-slate-400">Launch optimization &amp; verification loop</p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-slate-400" />
-                  <label className="text-xs text-slate-300">Time Limit:</label>
-                  <select
-                    value={timeLimit}
-                    onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
-                    disabled={isSolving}
-                    className="bg-slate-900 border border-slate-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  >
-                    <option value={15}>15 seconds</option>
-                    <option value={30}>30 seconds</option>
-                    <option value={60}>60 seconds</option>
-                    <option value={120}>120 seconds</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="bg-slate-900/60 rounded-lg p-3 text-xs text-slate-300 space-y-1.5 border border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Guarantee Verification:</span>
-                    <span className="font-semibold text-emerald-400">100% of All Possible Results</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Objective Priority:</span>
-                    <span className="font-semibold text-slate-200">1) Guarantee &bull; 2) Min Tickets &bull; 3) Balance</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Proof Standard:</span>
-                    <span className="font-semibold text-indigo-300">PROVED OPTIMAL / BEST FOUND</span>
-                  </div>
-                </div>
-
-                {isSolving ? (
-                  <div className="space-y-3 p-4 bg-indigo-950/40 border border-indigo-500/30 rounded-lg">
-                    <div className="flex items-center justify-between text-xs text-indigo-200 font-semibold">
-                      <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-ping" />
-                        <span>Optimizing &bull; Iterative Constraint Generation</span>
-                      </div>
-                      <span className="text-[11px] font-mono text-indigo-300">Active</span>
-                    </div>
-                    <p className="text-xs text-slate-300 font-mono bg-slate-950/60 p-2.5 rounded border border-indigo-900/60">
-                      {progressStatus || 'Starting solver...'}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleStartOptimization}
-                      disabled={isSolving}
-                      className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-semibold shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/40 transition-all text-sm disabled:opacity-50 cursor-pointer"
-                    >
-                      <Play className="w-4 h-4 fill-white" />
-                      Start Optimization
-                    </button>
-
-                    {result && (
-                      <button
-                        type="button"
-                        onClick={handleReset}
-                        className="flex items-center gap-1.5 py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-colors text-xs font-semibold"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                        Reset
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Quick Principles Note */}
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 text-xs text-slate-400 space-y-2">
-              <div className="flex items-center gap-2 text-slate-300 font-semibold">
-                <HelpCircle className="w-4 h-4 text-indigo-400" />
-                <span>Developer Brief &amp; Guarantee Rules</span>
-              </div>
-              <ul className="list-disc list-inside space-y-1 text-slate-400 text-[11px]">
-                <li>Guarantees must be checked against <span className="text-slate-200 font-semibold">100% of possible results</span>, never random sample estimates.</li>
-                <li>Worst-case scenario must satisfy your target. Even if the worst possible draw occurs, the exact-match requirement is met.</li>
-                <li>Solutions with mathematical global proof show <span className="text-emerald-400 font-semibold">PROVED OPTIMAL</span>; otherwise <span className="text-indigo-400 font-semibold">BEST FOUND</span>.</li>
-              </ul>
-            </div>
-          </div>
         </div>
 
-        {/* Verification Report Section */}
+        {/* Verification Report Section (100% Audit against all combinations) */}
         {result?.verification && (
-          <section className="space-y-6">
+          <section className="space-y-6 pt-2">
             <VerificationReportView
               report={result.verification}
               status={result.status}
@@ -299,7 +326,7 @@ export const App: React.FC = () => {
               onResultChange={(res) => setActiveDrawnResult(res)}
             />
 
-            {/* Tickets View */}
+            {/* Generated Tickets View */}
             <TicketsView
               tickets={result.tickets}
               highlightNumbers={activeDrawnResult}
@@ -309,8 +336,8 @@ export const App: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-950 py-4 text-center text-xs text-slate-500">
-        Universal Lottery &amp; Combination Optimizer &bull; 100% Exhaustive Verification Architecture
+      <footer className="border-t border-slate-800/80 bg-[#090d18] py-4 text-center text-xs text-slate-500">
+        Universal Lottery / Combination Optimizer &bull; 100% Exhaustive Verification Architecture
       </footer>
     </div>
   );
