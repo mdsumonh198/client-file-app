@@ -132,7 +132,7 @@ export const App: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-400 flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/60">
               <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Engine: Iterative Cutting-Planes &bull; Bitmask SAT</span>
+              <span>Engine: Exact Cutting-Planes &bull; 64-bit SWAR Oracle &bull; Deepest-Cut IP</span>
             </span>
           </div>
         </div>
@@ -286,6 +286,7 @@ export const App: React.FC = () => {
               statusDetail={result.statusDetail}
               rounds={result.rounds}
               durationMs={result.durationMs}
+              solverEngine={result.solverEngine}
               onSelectResultToTest={(res) => setActiveDrawnResult(res)}
             />
 
@@ -293,6 +294,7 @@ export const App: React.FC = () => {
             <ResultSimulator
               config={config}
               tickets={result.tickets}
+              targets={targets}
               activeResult={activeDrawnResult}
               onResultChange={(res) => setActiveDrawnResult(res)}
             />

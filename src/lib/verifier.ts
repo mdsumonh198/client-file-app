@@ -4,17 +4,19 @@ import {
   exactMatchCount,
   toMask,
   BitMask,
+  swarPopcount32,
 } from './core';
 import { TargetMap, VerificationReport, ExactMatchStat } from '../types';
 
 export interface Violation {
   result: CombinationItem;
   failedTargets: { [k: number]: { actual: number; required: number } };
+  totalDeficit: number; // violation depth for deepest-cut selection
 }
 
 /**
  * Verifies a set of tickets against 100% of all possible game results.
- * Guaranteed zero-sample, exhaustive calculation.
+ * Guaranteed zero-sample, exhaustive mathematical calculation across the entire combinatorial space.
  */
 export function verifyTicketSet(
   numberFrom: number,
@@ -35,6 +37,8 @@ export function verifyTicketSet(
         min: 0,
         max: 0,
         avg: 0,
+        variance: 0,
+        stdDev: 0,
         worstResult: [],
         bestResult: [],
         requiredTarget: targets[k],
@@ -46,6 +50,7 @@ export function verifyTicketSet(
       totalResultsChecked: 0,
       stats: emptyStats,
       allTargetsPass: Object.keys(targets).length === 0,
+      balanceScore: 0,
     };
   }
 
@@ -53,18 +58,21 @@ export function verifyTicketSet(
   const minCounts = new Int32Array(resultSize + 1).fill(tickets.length + 1);
   const maxCounts = new Int32Array(resultSize + 1).fill(-1);
   const sumCounts = new Float64Array(resultSize + 1);
+  const sumSqCounts = new Float64Array(resultSize + 1);
   const worstResultIdx = new Int32Array(resultSize + 1).fill(0);
   const bestResultIdx = new Int32Array(resultSize + 1).fill(0);
 
-  // Scratch array for count per k for each result
+  // Scratch array for match count per k for current result
   const countsPerK = new Int32Array(resultSize + 1);
 
+  // Exhaustive loop over 100% of all results using exact SWAR popcount
   for (let rIdx = 0; rIdx < totalResults; rIdx++) {
     countsPerK.fill(0);
-    const rMask = results[rIdx].mask;
+    const rLo = results[rIdx].mask.lo;
+    const rHi = results[rIdx].mask.hi;
 
     for (let tIdx = 0; tIdx < ticketMasks.length; tIdx++) {
-      const k = exactMatchCount(ticketMasks[tIdx], rMask);
+      const k = swarPopcount32(ticketMasks[tIdx].lo & rLo) + swarPopcount32(ticketMasks[tIdx].hi & rHi);
       if (k <= resultSize) {
         countsPerK[k]++;
       }
@@ -73,6 +81,7 @@ export function verifyTicketSet(
     for (let k = 0; k <= resultSize; k++) {
       const c = countsPerK[k];
       sumCounts[k] += c;
+      sumSqCounts[k] += c * c;
 
       if (c < minCounts[k]) {
         minCounts[k] = c;
@@ -87,11 +96,17 @@ export function verifyTicketSet(
 
   const stats: Record<number, ExactMatchStat> = {};
   let allTargetsPass = true;
+  let targetVarianceSum = 0;
+  let targetCount = 0;
 
   for (let k = 0; k <= resultSize; k++) {
     const minVal = minCounts[k] === tickets.length + 1 ? 0 : minCounts[k];
     const maxVal = maxCounts[k] === -1 ? 0 : maxCounts[k];
     const avgVal = sumCounts[k] / totalResults;
+    // Exact mathematical variance = E[X^2] - (E[X])^2
+    const variance = Math.max(0, (sumSqCounts[k] / totalResults) - (avgVal * avgVal));
+    const stdDev = Math.sqrt(variance);
+
     const req = targets[k];
     const passed = req === undefined ? true : minVal >= req;
 
@@ -99,11 +114,18 @@ export function verifyTicketSet(
       allTargetsPass = false;
     }
 
+    if (req !== undefined) {
+      targetVarianceSum += variance;
+      targetCount++;
+    }
+
     stats[k] = {
       k,
       min: minVal,
       max: maxVal,
-      avg: Number(avgVal.toFixed(3)),
+      avg: Number(avgVal.toFixed(4)),
+      variance: Number(variance.toFixed(4)),
+      stdDev: Number(stdDev.toFixed(4)),
       worstResult: results[worstResultIdx[k]].nums,
       bestResult: results[bestResultIdx[k]].nums,
       requiredTarget: req,
@@ -111,18 +133,27 @@ export function verifyTicketSet(
     };
   }
 
+  // Priority 3: Balance score (average standard deviation across user targets, lower is more balanced)
+  const balanceScore = targetCount > 0 ? Number((targetVarianceSum / targetCount).toFixed(4)) : 0;
+
+  // Identify overall worst-case result: the result that has the minimum match count on highest requested target
+  const requestedKeys = Object.keys(targets).map(Number).sort((a, b) => b - a);
+  const primaryK = requestedKeys.length > 0 ? requestedKeys[0] : Math.min(resultSize, 3);
+
   return {
     totalTickets: tickets.length,
     totalResultsChecked: totalResults,
     stats,
     allTargetsPass,
-    worstCaseOverallResult: results[worstResultIdx[Math.min(resultSize, 4)]]?.nums || results[0].nums,
-    bestCaseOverallResult: results[bestResultIdx[Math.min(resultSize, 4)]]?.nums || results[0].nums,
+    worstCaseOverallResult: results[worstResultIdx[primaryK]]?.nums || results[0].nums,
+    bestCaseOverallResult: results[bestResultIdx[primaryK]]?.nums || results[0].nums,
+    balanceScore,
   };
 }
 
 /**
- * Quickly finds violating results that fail any of the specified targets.
+ * Separation Oracle: Evaluates ticket set against 100% of combinations.
+ * Identifies constraint violations and ranks them by deepest cut (largest deficit).
  */
 export function findViolatingResults(
   numberFrom: number,
@@ -130,7 +161,7 @@ export function findViolatingResults(
   resultSize: number,
   tickets: number[][],
   targets: TargetMap,
-  maxViolationsToFind = 250
+  maxViolationsToReturn = 100
 ): Violation[] {
   const ticketMasks: BitMask[] = tickets.map(toMask);
   const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
@@ -146,16 +177,18 @@ export function findViolatingResults(
 
   for (let rIdx = 0; rIdx < results.length; rIdx++) {
     countsPerK.fill(0);
-    const rMask = results[rIdx].mask;
+    const rLo = results[rIdx].mask.lo;
+    const rHi = results[rIdx].mask.hi;
 
     for (let tIdx = 0; tIdx < ticketMasks.length; tIdx++) {
-      const k = exactMatchCount(ticketMasks[tIdx], rMask);
+      const k = swarPopcount32(ticketMasks[tIdx].lo & rLo) + swarPopcount32(ticketMasks[tIdx].hi & rHi);
       if (k <= resultSize) {
         countsPerK[k]++;
       }
     }
 
     let hasViolation = false;
+    let totalDeficit = 0;
     const failedTargets: { [k: number]: { actual: number; required: number } } = {};
 
     for (let i = 0; i < targetEntries.length; i++) {
@@ -163,6 +196,8 @@ export function findViolatingResults(
       const actual = countsPerK[k];
       if (actual < req) {
         hasViolation = true;
+        const deficit = req - actual;
+        totalDeficit += deficit;
         failedTargets[k] = { actual, required: req };
       }
     }
@@ -171,12 +206,43 @@ export function findViolatingResults(
       violations.push({
         result: results[rIdx],
         failedTargets,
+        totalDeficit,
       });
-      if (violations.length >= maxViolationsToFind) {
-        break;
+    }
+  }
+
+  // Deepest-Cut Selection: Sort all violations descending by violation depth
+  violations.sort((a, b) => b.totalDeficit - a.totalDeficit);
+
+  if (violations.length <= maxViolationsToReturn) {
+    return violations;
+  }
+
+  // Orthogonal diversification: Pick the deepest cuts that don't excessively overlap
+  const selectedCuts: Violation[] = [];
+  const selectedMasks: BitMask[] = [];
+
+  for (let i = 0; i < violations.length; i++) {
+    const cand = violations[i];
+    let isTooClose = false;
+
+    // Keep candidate if it has high depth or low overlap with already chosen cuts
+    if (selectedCuts.length < maxViolationsToReturn) {
+      for (let s = 0; s < selectedMasks.length; s++) {
+        const overlap = exactMatchCount(cand.result.mask, selectedMasks[s]);
+        // If two cuts share almost all numbers, pick another to span diverse directions
+        if (overlap >= resultSize - 1 && cand.totalDeficit <= selectedCuts[s].totalDeficit) {
+          isTooClose = true;
+          break;
+        }
+      }
+
+      if (!isTooClose || selectedCuts.length + (violations.length - i) <= maxViolationsToReturn) {
+        selectedCuts.push(cand);
+        selectedMasks.push(cand.result.mask);
       }
     }
   }
 
-  return violations;
+  return selectedCuts.slice(0, maxViolationsToReturn);
 }

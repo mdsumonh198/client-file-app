@@ -20,6 +20,8 @@ export interface ExactMatchStat {
   min: number;
   max: number;
   avg: number;
+  variance: number;
+  stdDev: number;
   worstResult: number[];
   bestResult: number[];
   requiredTarget?: number;
@@ -33,6 +35,7 @@ export interface VerificationReport {
   allTargetsPass: boolean;
   worstCaseOverallResult?: number[];
   bestCaseOverallResult?: number[];
+  balanceScore: number;
 }
 
 export interface OptimizationResult {
@@ -46,6 +49,7 @@ export interface OptimizationResult {
   verification?: VerificationReport;
   durationMs: number;
   constraintsAdded: number;
+  solverEngine?: string;
 }
 
 export interface GamePreset {

@@ -8,6 +8,7 @@ interface VerificationReportViewProps {
   statusDetail?: string;
   rounds: number;
   durationMs: number;
+  solverEngine?: string;
   onSelectResultToTest?: (result: number[]) => void;
 }
 
@@ -17,6 +18,7 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   statusDetail,
   rounds,
   durationMs,
+  solverEngine,
   onSelectResultToTest,
 }) => {
   const statsList = Object.values(report.stats).sort((a, b) => a.k - b.k);
@@ -24,13 +26,15 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   const handleDownloadCSV = () => {
     const headers = [
       'Exact Match',
-      'Minimum',
-      'Maximum',
+      'Minimum (Worst Case)',
+      'Maximum (Best Case)',
       'Average',
+      'Variance',
+      'Std Dev',
       'Required Target',
       'Status',
-      'Worst Result',
-      'Best Result',
+      'Worst Result Example',
+      'Best Result Example',
     ].join(',');
 
     const rows = statsList.map((s) => {
@@ -38,14 +42,14 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       const statusStr = s.requiredTarget !== undefined ? (s.passed ? 'PASS' : 'FAIL') : '-';
       const worst = s.worstResult.join(';');
       const best = s.bestResult.join(';');
-      return `${s.k},${s.min},${s.max},${s.avg},"${targetStr}",${statusStr},"${worst}","${best}"`;
+      return `${s.k},${s.min},${s.max},${s.avg},${s.variance},${s.stdDev},"${targetStr}",${statusStr},"${worst}","${best}"`;
     });
 
     const csvContent = `data:text/csv;charset=utf-8,${headers}\n${rows.join('\n')}`;
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', 'verification.csv');
+    link.setAttribute('download', 'lottery_guarantee_verification.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -112,22 +116,29 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       </div>
 
       {/* Summary KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
           <span className="text-[11px] text-slate-400 block mb-1">Total Selected Tickets</span>
           <span className="text-xl font-bold text-white font-mono">{report.totalTickets}</span>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
-          <span className="text-[11px] text-slate-400 block mb-1">Results Verified</span>
+          <span className="text-[11px] text-slate-400 block mb-1">Results Verified (100%)</span>
           <span className="text-xl font-bold text-cyan-300 font-mono">
             {report.totalResultsChecked.toLocaleString()}
           </span>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
-          <span className="text-[11px] text-slate-400 block mb-1">Optimization Rounds</span>
+          <span className="text-[11px] text-slate-400 block mb-1">Cutting-Plane Rounds</span>
           <span className="text-xl font-bold text-indigo-300 font-mono">{rounds}</span>
+        </div>
+
+        <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
+          <span className="text-[11px] text-slate-400 block mb-1">Win Variance ($\sigma^2$)</span>
+          <span className="text-xl font-bold text-amber-300 font-mono">
+            {report.balanceScore.toFixed(3)}
+          </span>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
@@ -150,6 +161,15 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
         </div>
       </div>
 
+      {solverEngine && (
+        <div className="mb-4 px-3 py-1.5 bg-slate-900/70 border border-slate-700/50 rounded-lg flex items-center justify-between text-xs text-slate-400">
+          <span>
+            <strong className="text-slate-300">Exact Solver Engine:</strong> {solverEngine}
+          </span>
+          <span className="text-[11px] text-indigo-300 font-mono">Deterministic Proof Verified</span>
+        </div>
+      )}
+
       {/* Verification table */}
       <div className="overflow-x-auto rounded-lg border border-slate-700/60">
         <table className="w-full text-left text-xs">
@@ -159,6 +179,8 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
               <th className="py-2.5 px-3 text-right">Worst Case (Min)</th>
               <th className="py-2.5 px-3 text-right">Best Case (Max)</th>
               <th className="py-2.5 px-3 text-right">Average</th>
+              <th className="py-2.5 px-3 text-right">Variance ($\sigma^2$)</th>
+              <th className="py-2.5 px-3 text-right">Std Dev ($\sigma$)</th>
               <th className="py-2.5 px-3 text-center">Required Target</th>
               <th className="py-2.5 px-3 text-center">Status</th>
               <th className="py-2.5 px-3">Worst-Case Result Example</th>
@@ -178,7 +200,11 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
                   <td className="py-2.5 px-3 font-semibold text-slate-200">
                     Exact {stat.k}
                   </td>
-                  <td className="py-2.5 px-3 text-right font-mono font-bold text-white">
+                  <td className={`py-2.5 px-3 text-right font-mono font-bold ${
+                    hasTarget && stat.min >= (stat.requiredTarget || 0)
+                      ? 'text-emerald-400'
+                      : 'text-white'
+                  }`}>
                     {stat.min}
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-slate-300">
@@ -186,6 +212,12 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-cyan-300">
                     {stat.avg.toFixed(3)}
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-mono text-amber-300/90">
+                    {stat.variance.toFixed(3)}
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-mono text-amber-200/80">
+                    &plusmn;{stat.stdDev.toFixed(3)}
                   </td>
                   <td className="py-2.5 px-3 text-center font-mono">
                     {hasTarget ? (

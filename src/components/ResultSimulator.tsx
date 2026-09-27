@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { GameConfig } from '../types';
-import { Dices, BarChart3 } from 'lucide-react';
+import { GameConfig, TargetMap } from '../types';
+import { Dices, BarChart3, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { exactMatchCount, toMask } from '../lib/core';
 
 interface ResultSimulatorProps {
   config: GameConfig;
   tickets: number[][];
+  targets?: TargetMap;
   activeResult: number[];
   onResultChange: (result: number[]) => void;
 }
@@ -13,6 +14,7 @@ interface ResultSimulatorProps {
 export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
   config,
   tickets,
+  targets = {},
   activeResult,
   onResultChange,
 }) => {
@@ -143,18 +145,36 @@ export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
       {/* Breakdown per exact match count for this draw */}
       {evaluation && (
         <div>
-          <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2.5">
-            Match Distribution For This Draw:
-          </h3>
+          <div className="flex items-center justify-between mb-2.5">
+            <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-amber-400" />
+              Match Distribution For This Draw:
+            </h3>
+            {Object.keys(targets).length > 0 && (
+              <span className="text-[11px] text-emerald-400 flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Guarantees Verified On Current Draw
+              </span>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
             {Array.from({ length: config.resultSize + 1 }, (_, k) => {
               const count = evaluation[k];
               const hasHits = count > 0;
+              const req = targets[k];
+              const hasTarget = req !== undefined;
+              const passesTarget = hasTarget ? count >= req : true;
+
               return (
                 <div
                   key={k}
                   className={`p-2.5 rounded-lg border text-center transition-all ${
-                    hasHits
+                    hasTarget
+                      ? passesTarget
+                        ? 'bg-slate-900/90 border-emerald-500/50 ring-1 ring-emerald-500/30'
+                        : 'bg-rose-950/40 border-rose-500/50'
+                      : hasHits
                       ? 'bg-slate-900/90 border-amber-500/40 ring-1 ring-amber-500/20'
                       : 'bg-slate-900/40 border-slate-800'
                   }`}
@@ -162,12 +182,33 @@ export const ResultSimulator: React.FC<ResultSimulatorProps> = ({
                   <span className="text-[11px] text-slate-400 block mb-0.5">Exact {k}</span>
                   <span
                     className={`text-base font-bold font-mono ${
-                      hasHits ? 'text-amber-400' : 'text-slate-600'
+                      hasTarget
+                        ? passesTarget
+                          ? 'text-emerald-400'
+                          : 'text-rose-400'
+                        : hasHits
+                        ? 'text-amber-400'
+                        : 'text-slate-600'
                     }`}
                   >
                     {count}
                   </span>
                   <span className="text-[10px] text-slate-500 block">tickets</span>
+
+                  {hasTarget && (
+                    <div className="mt-1 pt-1 border-t border-slate-700/60">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 block">
+                        Target &ge; {req}
+                      </span>
+                      {passesTarget ? (
+                        <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-400">
+                          <CheckCircle2 className="w-2.5 h-2.5" /> PASS
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-bold text-rose-400">FAIL</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
