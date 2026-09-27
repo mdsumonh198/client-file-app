@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GameConfig, TargetMap, OptimizationResult } from './types';
 import { PRESETS } from './lib/presets';
+import { combinationCountBigInt } from './lib/core';
 import { GameConfigForm } from './components/GameConfigForm';
 import { TargetsMatrix } from './components/TargetsMatrix';
 import { TicketsView } from './components/TicketsView';
@@ -28,7 +29,15 @@ import {
   Ticket,
   RefreshCw,
   Server,
+  Terminal,
 } from 'lucide-react';
+
+interface LiveActivityLog {
+  id: string;
+  timestamp: string;
+  message: string;
+  color?: string;
+}
 
 export const App: React.FC = () => {
   const [config, setConfig] = useState<GameConfig>({
@@ -46,6 +55,10 @@ export const App: React.FC = () => {
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [liveInfo, setLiveInfo] = useState<SolverProgressInfo | null>(null);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
+
+  const [activityLogs, setActivityLogs] = useState<LiveActivityLog[]>([]);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const lastLoggedStatusRef = useRef<string>('');
 
   const [engineMode, setEngineMode] = useState<'server' | 'browser'>(() => {
     return (localStorage.getItem('preferred_engine_mode') as 'server' | 'browser') || 'server';
@@ -100,6 +113,26 @@ export const App: React.FC = () => {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}s`;
   };
 
+  const addActivityLog = (message: string, color = 'text-slate-300') => {
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    setActivityLogs((prev) => [
+      ...prev.slice(-80),
+      {
+        id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: `[${timeStr}]`,
+        message,
+        color,
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [activityLogs]);
+
   const [showLiveTicketsPreview, setShowLiveTicketsPreview] = useState<boolean>(false);
   const optimizerControllerRef = useRef<{ stop: () => void; terminate: () => void; promise?: Promise<OptimizationResult> } | null>(null);
 
@@ -139,6 +172,7 @@ export const App: React.FC = () => {
     }
     stopRequestedRef.current = true;
     setProgressStatus('Finalizing best tickets found so far...');
+    addActivityLog('⏹️ Stop requested: Finalizing and keeping best tickets found so far...', 'text-amber-400 font-bold');
   };
 
   const handleStartOptimization = async (overrideEngine?: 'server' | 'browser') => {
@@ -158,15 +192,77 @@ export const App: React.FC = () => {
     stopRequestedRef.current = false;
     setIsSolving(true);
     setProgressPercent(10);
-    setLiveInfo(null);
-    setProgressStatus(
-      currentEngine === 'server'
-        ? `Connecting to Server CPU Engine (${serverHardware?.cpuCores || 'Multi'} Cores)...`
-        : 'Starting Browser Web Worker...'
-    );
+    const initialStatus = currentEngine === 'server'
+      ? `Connecting to Server CPU Engine (${serverHardware?.cpuCores || 'Multi'} Cores)...`
+      : 'Starting Browser Web Worker...';
+    setProgressStatus(initialStatus);
+
+    const pool = Math.max(0, config.numberTo - config.numberFrom + 1);
+    const currentCombos = pool >= config.resultSize ? Number(combinationCountBigInt(pool, config.resultSize)) : 0;
+
+    lastLoggedStatusRef.current = '';
+    const nowTimeStr = `[${new Date().toTimeString().slice(0, 8)}]`;
+    setActivityLogs([
+      {
+        id: 'init_1',
+        timestamp: nowTimeStr,
+        message: currentEngine === 'server'
+          ? `⚡ System connected to Server Multi-Core CPU Engine (${serverHardware?.cpuCores || '2'} Cores / 4GB RAM)`
+          : '⚡ System initialized Browser Worker (High-Speed WASM + Bitset)',
+        color: 'text-cyan-400 font-bold',
+      },
+      {
+        id: 'init_2',
+        timestamp: nowTimeStr,
+        message: `📐 Problem Matrix: Universe [${config.numberFrom}..${config.numberTo}], Ticket Size ${config.ticketSize}, Draw Size ${config.resultSize} (${currentCombos.toLocaleString()} total draws to cover)`,
+        color: 'text-indigo-300',
+      },
+      {
+        id: 'init_3',
+        timestamp: nowTimeStr,
+        message: `🎯 Target Requirements: ${Object.entries(activeTargets).map(([k, m]) => `Exact ${k}-Match ≥ ${m}`).join(', ')}`,
+        color: 'text-emerald-300 font-semibold',
+      },
+      {
+        id: 'init_4',
+        timestamp: nowTimeStr,
+        message: `🔄 Round 1: Seeding initial cutting constraints & generating matrix...`,
+        color: 'text-slate-300',
+      },
+    ]);
+
+    setLiveInfo({
+      round: 1,
+      maxRounds: 200,
+      currentTickets: 0,
+      currentTicketList: [],
+      violationsCount: currentCombos,
+      activeConstraints: 35,
+      totalCombinations: currentCombos,
+      stepName: 'Initializing',
+      status: initialStatus,
+      engine: currentEngine === 'server' ? 'Server Turbo CPU' : 'Browser Worker',
+    });
 
     try {
       let controller: { stop: () => void; terminate: () => void; promise: Promise<OptimizationResult> };
+
+      const onProgressHandler = (info: SolverProgressInfo) => {
+        setLiveInfo(info);
+        setProgressStatus(info.status);
+        const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
+        setProgressPercent(pct);
+
+        if (info.status && info.status !== lastLoggedStatusRef.current) {
+          lastLoggedStatusRef.current = info.status;
+          let logColor = 'text-slate-300';
+          if (info.stepName === 'Separation Oracle') logColor = 'text-amber-300 font-medium';
+          else if (info.stepName === 'Optimization') logColor = 'text-cyan-300';
+          else if (info.stepName === 'Verification') logColor = 'text-emerald-300';
+          else if (info.stepName === 'Initialization') logColor = 'text-indigo-300';
+          addActivityLog(`[Round ${info.round}] ${info.status}`, logColor);
+        }
+      };
 
       if (currentEngine === 'server') {
         controller = runOptimizationWithServer({
@@ -176,12 +272,7 @@ export const App: React.FC = () => {
             timeLimitSeconds: timeLimit,
             maxRounds: 200,
           },
-          onProgress: (info) => {
-            setLiveInfo(info);
-            setProgressStatus(info.status);
-            const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
-            setProgressPercent(pct);
-          },
+          onProgress: onProgressHandler,
         });
       } else {
         controller = runOptimizationWithWorker({
@@ -193,12 +284,7 @@ export const App: React.FC = () => {
           timeLimitSeconds: timeLimit,
           seedConstraintCount: 35,
           maxRounds: 200,
-          onProgress: (info) => {
-            setLiveInfo(info);
-            setProgressStatus(info.status);
-            const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
-            setProgressPercent(pct);
-          },
+          onProgress: onProgressHandler,
         });
       }
 
@@ -207,6 +293,10 @@ export const App: React.FC = () => {
 
       setProgressPercent(100);
       setResult(optResult);
+      addActivityLog(
+        `🏆 ${optResult.status === 'PROVED OPTIMAL' ? 'PROVED OPTIMAL' : 'SUCCESS'}: Selected ${optResult.tickets.length} tickets covering 100% of combinations!`,
+        'text-emerald-400 font-bold'
+      );
       if (optResult.verification?.worstCaseOverallResult) {
         setActiveDrawnResult(optResult.verification.worstCaseOverallResult);
       } else if (optResult.tickets.length > 0) {
@@ -215,6 +305,7 @@ export const App: React.FC = () => {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(msg);
+      addActivityLog(`⚠️ Notice: ${msg}`, 'text-rose-400 font-semibold');
     } finally {
       setIsSolving(false);
       setProgressStatus('');
@@ -230,6 +321,8 @@ export const App: React.FC = () => {
     setLiveInfo(null);
   };
 
+  const poolSize = Math.max(0, config.numberTo - config.numberFrom + 1);
+  const totalCombosCount = poolSize >= config.resultSize ? Number(combinationCountBigInt(poolSize, config.resultSize)) : 0;
   const maxK = Math.min(config.ticketSize, config.resultSize);
   const activeTargetEntries = Object.entries(targets)
     .map(([k, min]) => ({ k: Number(k), min }))
@@ -482,7 +575,7 @@ export const App: React.FC = () => {
                 <div className="mt-1">
                   <div className="flex items-baseline gap-2">
                     <span className="text-xl sm:text-2xl font-black text-cyan-300 font-mono">
-                      {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : '...'}
+                      {liveInfo?.currentTickets ? `${liveInfo.currentTickets}` : '0'}
                     </span>
                     {liveInfo?.currentTicketList && liveInfo.currentTicketList.length > 0 && (
                       <button
@@ -527,9 +620,7 @@ export const App: React.FC = () => {
                 </div>
                 <div className="mt-1">
                   <div className="text-lg sm:text-xl font-black text-emerald-300 font-mono truncate">
-                    {liveInfo?.totalCombinations
-                      ? liveInfo.totalCombinations.toLocaleString()
-                      : '...'}
+                    {(liveInfo?.totalCombinations || totalCombosCount).toLocaleString()}
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
                     100% combination space
@@ -544,17 +635,69 @@ export const App: React.FC = () => {
                   <Activity className="w-4 h-4 text-rose-400" />
                 </div>
                 <div className="mt-1">
-                  <div className="text-lg sm:text-xl font-black text-rose-300 font-mono">
-                    {liveInfo?.violationsCount !== undefined
-                      ? liveInfo.stepName === 'Initialization'
-                        ? 'স্ক্যান হচ্ছে...'
-                        : `${liveInfo.violationsCount.toLocaleString()} টি`
-                      : '...'}
+                  <div className="text-lg sm:text-xl font-black text-rose-400 font-mono truncate">
+                    {(liveInfo?.violationsCount !== undefined && liveInfo.violationsCount !== null
+                      ? liveInfo.violationsCount
+                      : totalCombosCount
+                    ).toLocaleString()}
+                    <span className="text-xs font-normal text-slate-400 ml-1">টি</span>
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
                     {liveInfo?.violationsCount === 0 ? 'সব ড্র ১০০% কভার্ড' : 'টার্গেট পূরণ বাকি ড্র'}
                   </span>
                 </div>
+              </div>
+            </div>
+
+            {/* Live Small Terminal Screen: Real-Time Execution Log */}
+            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 shadow-inner">
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80 text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-400">
+                    <Terminal className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                    Live System Activity Log
+                    <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">(লাইভ প্রসেস স্ক্রিন)</span>
+                  </span>
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] font-mono text-cyan-400/80">
+                  <span className="bg-slate-900 border border-slate-800 px-2 py-0.5 rounded">
+                    {activityLogs.length} events
+                  </span>
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Active
+                  </span>
+                </div>
+              </div>
+
+              {/* Scrollable Small Log Screen with Monospace Output */}
+              <div
+                ref={logContainerRef}
+                className="max-h-36 overflow-y-auto space-y-1 font-mono text-[11px] leading-relaxed pr-1 select-text scrollbar-thin scrollbar-thumb-slate-700"
+              >
+                {activityLogs.length === 0 ? (
+                  <div className="text-slate-500 italic py-1">
+                    Connecting to solver engine and waiting for initial events...
+                  </div>
+                ) : (
+                  activityLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className="flex items-start gap-2 hover:bg-slate-900/60 rounded px-1.5 py-0.5 transition-colors"
+                    >
+                      <span className="text-slate-500 shrink-0 font-medium select-none">{log.timestamp}</span>
+                      <span className={`${log.color || 'text-slate-300'} break-words flex-1`}>
+                        {log.message}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
