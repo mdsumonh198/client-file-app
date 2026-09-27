@@ -30,7 +30,7 @@ export const App: React.FC = () => {
     3: 3,
   });
 
-  const [timeLimit, setTimeLimit] = useState<number>(60);
+  const [timeLimit, setTimeLimit] = useState<number>(0); // 0 = No Limit (Run Until Solved / Proved)
   const [isSolving, setIsSolving] = useState<boolean>(false);
   const [progressStatus, setProgressStatus] = useState<string>('');
   const [progressPercent, setProgressPercent] = useState<number>(0);
@@ -75,12 +75,12 @@ export const App: React.FC = () => {
         targets,
         {
           timeLimitSeconds: timeLimit,
-          seedConstraintCount: 25,
-          maxRounds: 60,
+          seedConstraintCount: 35,
+          maxRounds: 200,
           onProgress: (info) => {
             setProgressStatus(info.status);
-            // approximate progress percentage based on rounds
-            const pct = Math.min(95, Math.max(15, info.round * 12));
+            // approximate progress percentage based on rounds and violations
+            const pct = Math.min(95, Math.max(15, Math.round((info.round / 60) * 80)));
             setProgressPercent(pct);
           },
         }
@@ -188,17 +188,18 @@ export const App: React.FC = () => {
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Sliders className="w-3.5 h-3.5 text-slate-500" />
-                <span>Time Limit:</span>
+                <span>Solver Mode / Limit:</span>
                 <select
                   value={timeLimit}
                   onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
                   disabled={isSolving}
-                  className="bg-slate-950 border border-slate-700 text-xs text-white rounded px-2 py-1 font-mono cursor-pointer"
+                  className="bg-slate-950 border border-indigo-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
-                  <option value={15}>15s</option>
-                  <option value={30}>30s</option>
-                  <option value={60}>60s</option>
-                  <option value={120}>120s</option>
+                  <option value={0}>&infin; No Limit (Run Until Solved / Proved)</option>
+                  <option value={300}>5 Minutes (300s)</option>
+                  <option value={120}>2 Minutes (120s)</option>
+                  <option value={60}>1 Minute (60s)</option>
+                  <option value={30}>Quick Scan (30s)</option>
                 </select>
               </div>
             </div>

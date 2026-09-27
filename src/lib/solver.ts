@@ -285,13 +285,14 @@ export async function optimizeWithConstraintGeneration(
   validateGame(numberFrom, numberTo, ticketSize, resultSize);
 
   const {
-    timeLimitSeconds = 60,
+    timeLimitSeconds = 0, // 0 = Unlimited (runs until 100% full convergence or proved optimal)
     seedConstraintCount = 30,
-    maxRounds = 60,
+    maxRounds = 300,
     onProgress,
   } = options;
 
-  const timeLimitMs = timeLimitSeconds * 1000;
+  const isUnlimitedTime = timeLimitSeconds <= 0;
+  const timeLimitMs = isUnlimitedTime ? Infinity : timeLimitSeconds * 1000;
 
   // Generate full candidate ticket pool and full result space
   const allTickets = allCombinationsWithMasks(numberFrom, numberTo, ticketSize);
@@ -343,11 +344,13 @@ export async function optimizeWithConstraintGeneration(
 
   for (let round = 1; round <= maxRounds; round++) {
     const elapsed = Date.now() - startTime;
-    if (elapsed >= timeLimitMs && currentTickets.length > 0) {
+    if (!isUnlimitedTime && elapsed >= timeLimitMs && currentTickets.length > 0) {
       break;
     }
 
-    const remainingBudgetSec = Math.max(2, Math.floor((timeLimitMs - elapsed) / 1000));
+    const remainingBudgetSec = isUnlimitedTime
+      ? 120
+      : Math.max(2, Math.floor((timeLimitMs - elapsed) / 1000));
 
     // Solve the Restricted Master Problem with Exact Integer Programming
     const ipResult = await solveRestrictedMasterProblemIP(
@@ -376,17 +379,19 @@ export async function optimizeWithConstraintGeneration(
 
     // Separation Oracle:
     // Check ticket set against 100% of all possible results using exact SWAR popcount bitmasks
+    // Pass activeSet as excludeIndices so we exclusively find violating results that are NOT YET in the cut pool!
     const violations = findViolatingResults(
       numberFrom,
       numberTo,
       resultSize,
       currentTickets,
       targets,
-      35 // Deepest cuts to select per iteration
+      50, // Deepest cuts to select per iteration
+      activeSet
     );
 
     if (violations.length === 0) {
-      // 100% OF ALL RESULTS PASS ALL TARGET GUARANTEES
+      // Double check full 100% exhaustive verification across ALL combinations
       const finalReport = verifyTicketSet(
         numberFrom,
         numberTo,
@@ -395,27 +400,30 @@ export async function optimizeWithConstraintGeneration(
         targets
       );
 
-      const status: SolverStatus = isProvedOptimal ? 'PROVED OPTIMAL' : 'BEST FOUND';
-      const statusDetail = isProvedOptimal
-        ? `Mathematically proved optimal: Minimum ticket count (${currentTickets.length}) verified with zero constraint violations across 100% of all ${allResults.length.toLocaleString()} results.`
-        : `Guaranteed worst-case achieved: 100% of all ${allResults.length.toLocaleString()} combinations strictly satisfy or exceed all requested targets.`;
+      if (finalReport.allTargetsPass) {
+        // 100% OF ALL RESULTS PASS ALL TARGET GUARANTEES
+        const status: SolverStatus = isProvedOptimal ? 'PROVED OPTIMAL' : 'BEST FOUND';
+        const statusDetail = isProvedOptimal
+          ? `Mathematically proved optimal: Minimum ticket count (${currentTickets.length}) verified with zero constraint violations across 100% of all ${allResults.length.toLocaleString()} results.`
+          : `Guaranteed worst-case achieved: 100% of all ${allResults.length.toLocaleString()} combinations strictly satisfy or exceed all requested targets.`;
 
-      return {
-        status,
-        statusDetail,
-        rounds: round,
-        tickets: currentTickets,
-        objective: currentTickets.length,
-        isOptimal: isProvedOptimal,
-        verification: finalReport,
-        durationMs: Date.now() - startTime,
-        constraintsAdded,
-        solverEngine: usedEngine,
-      };
+        return {
+          status,
+          statusDetail,
+          rounds: round,
+          tickets: currentTickets,
+          objective: currentTickets.length,
+          isOptimal: isProvedOptimal,
+          verification: finalReport,
+          durationMs: Date.now() - startTime,
+          constraintsAdded,
+          solverEngine: usedEngine,
+        };
+      }
     }
 
     // Deepest-Cut Selection:
-    // Add the most violated results (deepest cuts) into the Restricted Master Problem
+    // Add the unconstrained violated results (deepest cuts) into the Restricted Master Problem
     let newlyAdded = 0;
     for (let v = 0; v < violations.length; v++) {
       const vResult = violations[v].result;
@@ -427,7 +435,7 @@ export async function optimizeWithConstraintGeneration(
     }
     constraintsAdded += newlyAdded;
 
-    const deepestDeficit = violations[0].totalDeficit;
+    const deepestDeficit = violations[0]?.totalDeficit ?? 1;
     onProgress?.({
       round,
       currentTickets: currentTickets.length,
@@ -436,8 +444,7 @@ export async function optimizeWithConstraintGeneration(
       engine: usedEngine,
     });
 
-    if (newlyAdded === 0) {
-      // All violating results already active in the cut pool
+    if (newlyAdded === 0 && violations.length === 0) {
       break;
     }
 

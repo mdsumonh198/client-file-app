@@ -161,7 +161,8 @@ export function findViolatingResults(
   resultSize: number,
   tickets: number[][],
   targets: TargetMap,
-  maxViolationsToReturn = 100
+  maxViolationsToReturn = 100,
+  excludeIndices?: Set<number>
 ): Violation[] {
   const ticketMasks: BitMask[] = tickets.map(toMask);
   const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
@@ -176,6 +177,11 @@ export function findViolatingResults(
   const countsPerK = new Int32Array(resultSize + 1);
 
   for (let rIdx = 0; rIdx < results.length; rIdx++) {
+    // If this result is already actively constrained in the master problem, skip it
+    if (excludeIndices && excludeIndices.has(rIdx)) {
+      continue;
+    }
+
     countsPerK.fill(0);
     const rLo = results[rIdx].mask.lo;
     const rHi = results[rIdx].mask.hi;
