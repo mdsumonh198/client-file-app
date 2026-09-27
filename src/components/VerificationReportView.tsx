@@ -16,7 +16,7 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   report,
   status,
   statusDetail,
-  rounds,
+  rounds: _rounds,
   durationMs,
   solverEngine,
   onSelectResultToTest,
@@ -24,6 +24,17 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   const statsList = Object.values(report.stats).sort((a, b) => a.k - b.k);
 
   const handleDownloadCSV = () => {
+    const summaryRows = [
+      `Total Selected Tickets,${report.totalTickets}`,
+      `Total Tested Draws,${report.totalResultsChecked}`,
+      `PASS Draws (>= 5 Matches),${report.totalPassDraws ?? report.totalResultsChecked}`,
+      `FAIL Draws (Misses),${report.totalFailDraws ?? 0}`,
+      `Pass Rate,${report.passRatePct !== undefined ? `${report.passRatePct.toFixed(2)}%` : '100%'}`,
+      `Zero-Miss Status,${report.allTargetsPass ? '100% ZERO-MISS PROVEN' : 'FAIL'}`,
+      `Match Rule,Strict Intersection (>= 5 matches only)`,
+      '',
+    ].join('\n');
+
     const headers = [
       'Exact Match',
       'Minimum (Worst Case)',
@@ -45,14 +56,16 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
       return `${s.k},${s.min},${s.max},${s.avg},${s.variance},${s.stdDev},"${targetStr}",${statusStr},"${worst}","${best}"`;
     });
 
-    const csvContent = `data:text/csv;charset=utf-8,${headers}\n${rows.join('\n')}`;
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${rows.join('\n')}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', 'lottery_guarantee_verification.csv');
+    link.href = url;
+    link.download = 'lottery_guarantee_verification.csv';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const getStatusBadge = () => {
@@ -115,23 +128,49 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
         </button>
       </div>
 
-      {/* Summary KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
+      {/* Summary KPI Cards - Exact User Audit Specifications */}
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-4">
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
           <span className="text-[11px] text-slate-400 block mb-1">Total Selected Tickets</span>
-          <span className="text-xl font-bold text-white font-mono">{report.totalTickets}</span>
+          <span className="text-xl font-bold text-white font-mono">{report.totalTickets.toLocaleString()}</span>
         </div>
 
+        {/* Total Tested Draws */}
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
-          <span className="text-[11px] text-slate-400 block mb-1">Results Verified (100%)</span>
+          <span className="text-[11px] text-slate-400 block mb-1">Total Tested Draws</span>
           <span className="text-xl font-bold text-cyan-300 font-mono">
             {report.totalResultsChecked.toLocaleString()}
           </span>
         </div>
 
-        <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
-          <span className="text-[11px] text-slate-400 block mb-1">Cutting-Plane Rounds</span>
-          <span className="text-xl font-bold text-indigo-300 font-mono">{rounds}</span>
+        {/* PASS Draws */}
+        <div className="bg-emerald-950/30 border border-emerald-500/50 rounded-lg p-3">
+          <span className="text-[11px] text-emerald-400 block mb-1 font-semibold">PASS Draws (≥ 5 Matches)</span>
+          <span className="text-xl font-bold text-emerald-400 font-mono">
+            {(report.totalPassDraws ?? report.totalResultsChecked).toLocaleString()}
+          </span>
+          <span className="text-[10px] text-emerald-400/80 block mt-0.5 font-bold">
+            {report.passRatePct !== undefined ? `${report.passRatePct.toFixed(2)}%` : '100%'}
+          </span>
+        </div>
+
+        {/* FAIL Draws */}
+        <div className={`p-3 rounded-lg border ${
+          (report.totalFailDraws ?? 0) === 0
+            ? 'bg-slate-900/80 border-slate-700/60'
+            : 'bg-rose-950/60 border-rose-500/90 ring-2 ring-rose-500/50'
+        }`}>
+          <span className="text-[11px] text-slate-400 block mb-1 font-semibold">FAIL Draws</span>
+          <span className={`text-xl font-bold font-mono ${
+            (report.totalFailDraws ?? 0) === 0 ? 'text-emerald-400' : 'text-rose-400 font-black'
+          }`}>
+            {(report.totalFailDraws ?? 0).toLocaleString()}
+          </span>
+          <span className={`text-[10px] block mt-0.5 font-bold ${
+            (report.totalFailDraws ?? 0) === 0 ? 'text-emerald-400/80' : 'text-rose-400'
+          }`}>
+            {(report.totalFailDraws ?? 0) === 0 ? 'Zero Miss (100%)' : 'CRITICAL FAIL'}
+          </span>
         </div>
 
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg p-3">
@@ -150,13 +189,44 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
           >
             {report.allTargetsPass ? (
               <>
-                <CheckCircle2 className="w-4 h-4" /> 100% PASSED
+                <CheckCircle2 className="w-4 h-4" /> 100% ZERO MISS
               </>
             ) : (
               <>
                 <XCircle className="w-4 h-4" /> TARGET FAILED
               </>
             )}
+          </span>
+        </div>
+      </div>
+
+      {/* Critical Zero-Miss Audit Guarantee Banner */}
+      <div className={`p-3 rounded-xl border mb-4 text-xs ${
+        report.allTargetsPass
+          ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200'
+          : 'bg-rose-950/50 border-rose-500/80 text-rose-200'
+      }`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {report.allTargetsPass ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span className="font-semibold">
+              {report.allTargetsPass ? (
+                <span>
+                  <b>১০০% ব্রুট-ফোর্স অডিট সম্পন্ন:</b> Total Tested Draws = <b>{report.totalResultsChecked.toLocaleString()}</b> | FAIL Draws = <b className="text-emerald-400 font-mono">0 (Zero Miss)</b> | PASS Draws = <b className="text-emerald-400 font-mono">{(report.totalPassDraws ?? report.totalResultsChecked).toLocaleString()} (100.0%)</b>.
+                </span>
+              ) : (
+                <span>
+                  <b>সতর্কতা:</b> {report.totalFailDraws}টি ড্র-তে কাভারেজ মিস হয়েছে। কোনো আনুমানিক হিসাব ছাড়াই শতভাগ জিরো মিস না হওয়া পর্যন্ত ইনভেস্টমেন্ট নিষিদ্ধ।
+                </span>
+              )}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-black/40 text-slate-300">
+            Strict Intersection (5 or 6 matches only)
           </span>
         </div>
       </div>

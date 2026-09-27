@@ -48,6 +48,9 @@ export function verifyTicketSet(
     return {
       totalTickets: tickets.length,
       totalResultsChecked: 0,
+      totalPassDraws: 0,
+      totalFailDraws: 0,
+      passRatePct: 0,
       stats: emptyStats,
       allTargetsPass: Object.keys(targets).length === 0,
       balanceScore: 0,
@@ -78,9 +81,14 @@ export function verifyTicketSet(
   const sumSqCounts = new Float64Array(resultSize + 1);
   const worstResultIdx = new Int32Array(resultSize + 1).fill(0);
   const bestResultIdx = new Int32Array(resultSize + 1).fill(0);
+  const minAtLeastCounts = new Int32Array(resultSize + 1).fill(tickets.length + 1);
 
   // Scratch array for match count per k for current result
   const countsPerK = new Int32Array(resultSize + 1);
+
+  // Track exact PASS / FAIL count across every single tested draw
+  let passDrawsCount = 0;
+  let failDrawsCount = 0;
 
   // Exhaustive loop over 100% of all results using exact SWAR popcount on fast typed arrays
   for (let rIdx = 0; rIdx < totalResults; rIdx++) {
@@ -93,6 +101,33 @@ export function verifyTicketSet(
       if (k <= resultSize) {
         countsPerK[k]++;
       }
+    }
+
+    // Strict intersection logic:
+    // A draw passes if it satisfies all target constraints.
+    // For Exact 5: 5-match or 6-match qualifies; 4-match NEVER qualifies as 5.
+    let drawPassed = true;
+    for (let k = 0; k <= resultSize; k++) {
+      let atLeastK = 0;
+      for (let m = k; m <= resultSize; m++) {
+        atLeastK += countsPerK[m];
+      }
+      if (atLeastK < minAtLeastCounts[k]) {
+        minAtLeastCounts[k] = atLeastK;
+      }
+
+      const req = targets[k];
+      if (req !== undefined && req > 0) {
+        if (atLeastK < req) {
+          drawPassed = false;
+        }
+      }
+    }
+
+    if (drawPassed) {
+      passDrawsCount++;
+    } else {
+      failDrawsCount++;
     }
 
     for (let k = 0; k <= resultSize; k++) {
@@ -112,7 +147,7 @@ export function verifyTicketSet(
   }
 
   const stats: Record<number, ExactMatchStat> = {};
-  let allTargetsPass = true;
+  let allTargetsPass = failDrawsCount === 0;
   let targetVarianceSum = 0;
   let targetCount = 0;
 
@@ -125,7 +160,7 @@ export function verifyTicketSet(
     const stdDev = Math.sqrt(variance);
 
     const req = targets[k];
-    const passed = req === undefined ? true : minVal >= req;
+    const passed = req === undefined ? true : (minAtLeastCounts[k] >= req);
 
     if (!passed) {
       allTargetsPass = false;
@@ -156,10 +191,14 @@ export function verifyTicketSet(
   // Identify overall worst-case result: the result that has the minimum match count on highest requested target
   const requestedKeys = Object.keys(targets).map(Number).sort((a, b) => b - a);
   const primaryK = requestedKeys.length > 0 ? requestedKeys[0] : Math.min(resultSize, 3);
+  const passRatePct = totalResults > 0 ? Number(((passDrawsCount / totalResults) * 100).toFixed(4)) : 100;
 
   return {
     totalTickets: tickets.length,
     totalResultsChecked: totalResults,
+    totalPassDraws: passDrawsCount,
+    totalFailDraws: failDrawsCount,
+    passRatePct,
     stats,
     allTargetsPass,
     worstCaseOverallResult: results[worstResultIdx[primaryK]]?.nums || results[0].nums,
@@ -373,7 +412,11 @@ export async function verifyTicketSetAsync(
   const sumSqCounts = new Float64Array(resultSize + 1);
   const worstResultIdx = new Int32Array(resultSize + 1).fill(0);
   const bestResultIdx = new Int32Array(resultSize + 1).fill(0);
+  const minAtLeastCounts = new Int32Array(resultSize + 1).fill(tickets.length + 1);
   const countsPerK = new Int32Array(resultSize + 1);
+
+  let passDrawsCount = 0;
+  let failDrawsCount = 0;
 
   const yieldBatch = 20000;
   for (let rIdx = 0; rIdx < totalResults; rIdx++) {
@@ -393,6 +436,33 @@ export async function verifyTicketSetAsync(
       }
     }
 
+    // Strict intersection logic:
+    // A draw passes if it satisfies all target constraints.
+    // For Exact 5: 5-match or 6-match qualifies; 4-match NEVER qualifies as 5.
+    let drawPassed = true;
+    for (let k = 0; k <= resultSize; k++) {
+      let atLeastK = 0;
+      for (let m = k; m <= resultSize; m++) {
+        atLeastK += countsPerK[m];
+      }
+      if (atLeastK < minAtLeastCounts[k]) {
+        minAtLeastCounts[k] = atLeastK;
+      }
+
+      const req = targets[k];
+      if (req !== undefined && req > 0) {
+        if (atLeastK < req) {
+          drawPassed = false;
+        }
+      }
+    }
+
+    if (drawPassed) {
+      passDrawsCount++;
+    } else {
+      failDrawsCount++;
+    }
+
     for (let k = 0; k <= resultSize; k++) {
       const c = countsPerK[k];
       sumCounts[k] += c;
@@ -410,7 +480,7 @@ export async function verifyTicketSetAsync(
   }
 
   const stats: Record<number, ExactMatchStat> = {};
-  let allTargetsPass = true;
+  let allTargetsPass = failDrawsCount === 0;
   let targetVarianceSum = 0;
   let targetCount = 0;
 
@@ -422,7 +492,7 @@ export async function verifyTicketSetAsync(
     const stdDev = Math.sqrt(variance);
 
     const req = targets[k];
-    const passed = req === undefined ? true : minVal >= req;
+    const passed = req === undefined ? true : (minAtLeastCounts[k] >= req);
 
     if (!passed) {
       allTargetsPass = false;
@@ -450,10 +520,14 @@ export async function verifyTicketSetAsync(
   const balanceScore = targetCount > 0 ? Number((targetVarianceSum / targetCount).toFixed(4)) : 0;
   const requestedKeys = Object.keys(targets).map(Number).sort((a, b) => b - a);
   const primaryK = requestedKeys.length > 0 ? requestedKeys[0] : Math.min(resultSize, 3);
+  const passRatePct = totalResults > 0 ? Number(((passDrawsCount / totalResults) * 100).toFixed(4)) : 100;
 
   return {
     totalTickets: tickets.length,
     totalResultsChecked: totalResults,
+    totalPassDraws: passDrawsCount,
+    totalFailDraws: failDrawsCount,
+    passRatePct,
     stats,
     allTargetsPass,
     worstCaseOverallResult: results[worstResultIdx[primaryK]]?.nums || results[0].nums,

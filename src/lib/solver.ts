@@ -3,6 +3,7 @@ import {
   swarPopcount32,
   validateGame,
   combinationCount,
+  toMask,
 } from './core';
 import { TargetMap, OptimizationResult, SolverStatus, GameConfig } from '../types';
 import { verifyTicketSetAsync } from './verifier';
@@ -235,7 +236,7 @@ export async function fastGreedyBitsetCover(
     const candOut = new Int32Array(N);
     const candSub5 = new Int32Array(K - 1);
     const candDraw = new Int32Array(K);
-    const maxCovers = K * (N - K);
+    const maxCovers = 1 + K * (N - K);
     const currentCoveredIndices = new Int32Array(maxCovers);
     const bestCoveredIndices = new Int32Array(maxCovers);
     const bestTicket = new Int32Array(K);
@@ -284,7 +285,46 @@ export async function fastGreedyBitsetCover(
 
       let bestNewCovers = -1;
 
-      // Candidate tickets: Drop 1 number from draw (K choices), add 1 outside number (N - K choices)
+      // Candidate 0: drawNums itself (covers itself with 6-match, plus 126 draws with 5-match)
+      {
+        let covIdx = 0;
+        currentCoveredIndices[covIdx++] = drawPointer;
+        let newCount = drawCoverage[drawPointer] < primaryReq ? 1 : 0;
+
+        for (let drop = 0; drop < K; drop++) {
+          let sIdx = 0;
+          for (let i = 0; i < K; i++) {
+            if (i !== drop) sub5[sIdx++] = drawNums[i];
+          }
+          for (let o = 0; o < outCount; o++) {
+            const outNum = outside[o];
+            let p2 = false;
+            let cdIdx = 0;
+            for (let i = 0; i < K - 1; i++) {
+              if (!p2 && outNum < sub5[i]) {
+                candDraw[cdIdx++] = outNum;
+                p2 = true;
+              }
+              candDraw[cdIdx++] = sub5[i];
+            }
+            if (!p2) candDraw[cdIdx++] = outNum;
+
+            const dIdx = combinationToIndex(candDraw, N, K, minVal);
+            currentCoveredIndices[covIdx++] = dIdx;
+            if (drawCoverage[dIdx] < primaryReq) {
+              newCount++;
+            }
+          }
+        }
+
+        if (newCount > bestNewCovers) {
+          bestNewCovers = newCount;
+          bestTicket.set(drawNums);
+          bestCoveredIndices.set(currentCoveredIndices);
+        }
+      }
+
+      // Candidate tickets 1..126: Drop 1 number from draw (K choices), add 1 outside number (N - K choices)
       for (let drop = 0; drop < K; drop++) {
         let sIdx = 0;
         for (let i = 0; i < K; i++) {
@@ -304,7 +344,8 @@ export async function fastGreedyBitsetCover(
           }
           if (!placed) candTicket[cIdx++] = outNum;
 
-          // Check covered draws for candTicket
+          // Check covered draws for candTicket:
+          // 1 draw of 6 matches (candTicket itself) + 126 draws of 5 matches
           candIn.fill(0);
           for (let i = 0; i < K; i++) candIn[candTicket[i]] = 1;
           let candOutCount = 0;
@@ -312,8 +353,10 @@ export async function fastGreedyBitsetCover(
             if (!candIn[i]) candOut[candOutCount++] = i;
           }
 
-          let newCount = 0;
           let covIdx = 0;
+          const selfIdx = combinationToIndex(candTicket, N, K, minVal);
+          currentCoveredIndices[covIdx++] = selfIdx;
+          let newCount = drawCoverage[selfIdx] < primaryReq ? 1 : 0;
 
           for (let d2 = 0; d2 < K; d2++) {
             let csIdx = 0;
@@ -426,90 +469,93 @@ export async function fastGreedyBitsetCover(
     remainingUncovered = rCount;
     let iteration = 0;
 
-    let scanIdx = 0;
-    while (remainingUncovered > 0) {
+    // Fast active array of uncovered draw indices
+    let uncoveredList = new Int32Array(rCount);
+    for (let i = 0; i < rCount; i++) uncoveredList[i] = i;
+    let uncLen = rCount;
+
+    while (uncLen > 0) {
       if (shouldStop?.()) break;
       const elapsed = Date.now() - startTime;
       if (!isUnlimitedTime && elapsed >= timeLimitMs && selectedTickets.length > 0) break;
 
-      while (scanIdx < rCount && targetCounts[scanIdx] >= primaryReq) {
-        scanIdx++;
-      }
-      if (scanIdx >= rCount) {
-        let any = -1;
-        for (let i = 0; i < rCount; i++) {
-          if (targetCounts[i] < primaryReq) { any = i; break; }
-        }
-        if (any === -1) { remainingUncovered = 0; break; }
-        scanIdx = any;
-      }
+      const targetDraw = uncoveredList[0];
+      const drawL = rLo[targetDraw];
+      const drawH = rHi[targetDraw];
 
-      const drawL = rLo[scanIdx];
-      const drawH = rHi[scanIdx];
-
-      // Identify candidate tickets that cover this draw
       let bestTIdx = -1;
       let bestNewHits = -1;
+      let candidatesTested = 0;
+      const maxCandidatesToTest = Math.min(200, tCount);
 
+      // Search for candidate tickets that cover targetDraw with >= primaryK
       for (let t = 0; t < tCount; t++) {
         const kMatch = swarPopcount32(tLo[t] & drawL) + swarPopcount32(tHi[t] & drawH);
-        if (kMatch === primaryK) {
-          // Count how many uncovered draws ticket t satisfies
+        if (kMatch >= primaryK) {
+          candidatesTested++;
           let newHits = 0;
-          for (let r = 0; r < rCount; r++) {
-            if (targetCounts[r] < primaryReq) {
-              const km = swarPopcount32(tLo[t] & rLo[r]) + swarPopcount32(tHi[t] & rHi[r]);
-              if (km === primaryK) {
-                newHits++;
-              }
+          for (let u = 0; u < uncLen; u++) {
+            const r = uncoveredList[u];
+            const km = swarPopcount32(tLo[t] & rLo[r]) + swarPopcount32(tHi[t] & rHi[r]);
+            if (km >= primaryK) {
+              newHits++;
             }
           }
+
           if (newHits > bestNewHits) {
             bestNewHits = newHits;
             bestTIdx = t;
           }
+
+          if (candidatesTested >= maxCandidatesToTest) break;
         }
       }
 
       if (bestTIdx === -1) {
-        // Mark draw satisfied to avoid infinite loop
-        targetCounts[scanIdx] = primaryReq;
-        remainingUncovered--;
-        scanIdx++;
-        continue;
+        bestTIdx = targetDraw < tCount ? targetDraw : 0;
       }
 
       const chosenNums = allTickets[bestTIdx].nums;
-      selectedTickets.push(chosenNums);
-
-      // Update coverage
-      for (let r = 0; r < rCount; r++) {
-        const km = swarPopcount32(tLo[bestTIdx] & rLo[r]) + swarPopcount32(tHi[bestTIdx] & rHi[r]);
-        if (km === primaryK) {
-          if (targetCounts[r] < primaryReq) {
-            targetCounts[r]++;
-            if (targetCounts[r] >= primaryReq) {
-              remainingUncovered--;
-            }
-          } else {
-            targetCounts[r]++;
-          }
-        }
+      const ticketKey = chosenNums.join(',');
+      if (!selectedTicketSet.has(ticketKey)) {
+        selectedTicketSet.add(ticketKey);
+        selectedTickets.push(chosenNums);
       }
 
+      // Update coverage and update active uncoveredList in O(uncLen)
+      const bLo = tLo[bestTIdx];
+      const bHi = tHi[bestTIdx];
+      let newUncLen = 0;
+      for (let u = 0; u < uncLen; u++) {
+        const r = uncoveredList[u];
+        const km = swarPopcount32(bLo & rLo[r]) + swarPopcount32(bHi & rHi[r]);
+        if (km >= primaryK) {
+          targetCounts[r]++;
+          if (targetCounts[r] < primaryReq) {
+            uncoveredList[newUncLen++] = r;
+          } else {
+            remainingUncovered--;
+          }
+        } else {
+          uncoveredList[newUncLen++] = r;
+        }
+      }
+      uncLen = newUncLen;
+
       iteration++;
-      if (iteration % 20 === 0) {
+      if (iteration % 15 === 0) {
+        const pct = ((rCount - uncLen) / rCount) * 100;
         onProgress?.({
           round: selectedTickets.length,
           maxRounds: 0,
           currentTickets: selectedTickets.length,
           currentTicketList: selectedTickets.slice(0, 50),
-          violationsCount: remainingUncovered,
+          violationsCount: uncLen,
           deficit: 1,
-          activeConstraints: rCount - remainingUncovered,
+          activeConstraints: rCount - uncLen,
           totalCombinations: rCount,
           stepName: 'Universal BitSet Cover',
-          status: `কভারেজ লুপ চলছে: ${selectedTickets.length}টি টিকিট নির্বাচিত, অবশিষ্ট ঘাটতি ড্র: ${remainingUncovered.toLocaleString()}টি...`,
+          status: `সার্বজনীন কভারেজ চলছে: ${selectedTickets.length}টি টিকিট নির্বাচিত (${pct.toFixed(1)}% কভার সম্পন্ন, বাকি: ${uncLen.toLocaleString()}টি ড্র)...`,
           engine: 'Universal BitSet Set Cover (100% Guaranteed)',
         });
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -517,7 +563,7 @@ export async function fastGreedyBitsetCover(
     }
   }
 
-  // Redundancy Elimination Pass (Backward 1-opt Pruning)
+  // Universal Redundancy Elimination Pass (Multi-Pass Reverse Pruning for ANY Game)
   onProgress?.({
     round: selectedTickets.length,
     maxRounds: 0,
@@ -528,67 +574,206 @@ export async function fastGreedyBitsetCover(
     activeConstraints: totalDraws,
     totalCombinations: totalDraws,
     stepName: 'Redundancy Elimination',
-    status: `অপ্রয়োজনীয় টিকিট ছাঁটাই (1-opt Backward Pruning) চলছে...`,
-    engine: 'Fast BitSet Redundancy Pruning',
+    status: `সার্বজনীন ডুপ্লিকেট টিকিট ছাঁটাই (Universal Multi-Pass Reverse Pruning) চলছে...`,
+    engine: 'Universal BitSet Redundancy Pruning',
   });
 
   let prunedTickets = selectedTickets;
-  if (selectedTickets.length > 5 && isDirectProjectionApplicable && primaryK === K - 1) {
-    const finalPruned: number[][] = [];
-    const s5 = new Int32Array(K - 1);
-    const cd = new Int32Array(K);
-    const tIn = new Uint8Array(N + minVal + 1);
-    const tOut = new Int32Array(N);
+  if (selectedTickets.length > 2) {
+    if (isDirectProjectionApplicable && primaryK === K - 1) {
+      // Ultra-Fast Zero-Allocation Combinadic Pruning for (K, K-1)
+      const maxCovers = 1 + K * (N - K);
+      const s5 = new Int32Array(K - 1);
+      const cd = new Int32Array(K);
+      const tIn = new Uint8Array(N + minVal + 1);
+      const tOut = new Int32Array(N);
+      const covList = new Int32Array(maxCovers);
 
-    for (let i = selectedTickets.length - 1; i >= 0; i--) {
-      if (i > 0 && i % 30 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-      const t = selectedTickets[i];
-      tIn.fill(0);
-      for (let j = 0; j < K; j++) tIn[t[j]] = 1;
-      let outCnt = 0;
-      for (let j = minVal; j < minVal + N; j++) {
-        if (!tIn[j]) tOut[outCnt++] = j;
-      }
+      // Helper to get all 127 covered draw indices for ticket t
+      const fill127Draws = (t: number[]) => {
+        let idx = 0;
+        covList[idx++] = combinationToIndex(t, N, K, minVal); // self draw (6-match)
 
-      // Check if ticket can be removed safely
-      let canRemove = true;
-      const covList: number[] = [];
-
-      for (let drop = 0; drop < K; drop++) {
-        let sIdx = 0;
-        for (let j = 0; j < K; j++) {
-          if (j !== drop) s5[sIdx++] = t[j];
+        tIn.fill(0);
+        for (let j = 0; j < K; j++) tIn[t[j]] = 1;
+        let outCnt = 0;
+        for (let j = minVal; j < minVal + N; j++) {
+          if (!tIn[j]) tOut[outCnt++] = j;
         }
-        for (let o = 0; o < outCnt; o++) {
-          const oNum = tOut[o];
-          let p = false;
-          let cdIdx = 0;
-          for (let j = 0; j < K - 1; j++) {
-            if (!p && oNum < s5[j]) { cd[cdIdx++] = oNum; p = true; }
-            cd[cdIdx++] = s5[j];
+
+        for (let drop = 0; drop < K; drop++) {
+          let sIdx = 0;
+          for (let j = 0; j < K; j++) {
+            if (j !== drop) s5[sIdx++] = t[j];
           }
-          if (!p) cd[cdIdx++] = oNum;
-          const dIdx = combinationToIndex(cd, N, K, minVal);
-          covList.push(dIdx);
-          if (drawCoverage[dIdx] <= primaryReq) {
+          for (let o = 0; o < outCnt; o++) {
+            const outNum = tOut[o];
+            let p = false;
+            let cdIdx = 0;
+            for (let j = 0; j < K - 1; j++) {
+              if (!p && outNum < s5[j]) { cd[cdIdx++] = outNum; p = true; }
+              cd[cdIdx++] = s5[j];
+            }
+            if (!p) cd[cdIdx++] = outNum;
+            covList[idx++] = combinationToIndex(cd, N, K, minVal);
+          }
+        }
+      };
+
+      // Pass 1: Reverse Pruning (end to start)
+      let currentTicketList = selectedTickets.slice();
+      let keptTickets: number[][] = [];
+
+      for (let i = currentTicketList.length - 1; i >= 0; i--) {
+        if (i > 0 && i % 40 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const t = currentTicketList[i];
+        fill127Draws(t);
+
+        let canRemove = true;
+        for (let j = 0; j < maxCovers; j++) {
+          if (drawCoverage[covList[j]] <= primaryReq) {
             canRemove = false;
+            break; // Critical early exit!
           }
+        }
+
+        if (canRemove) {
+          for (let j = 0; j < maxCovers; j++) {
+            drawCoverage[covList[j]]--;
+          }
+        } else {
+          keptTickets.push(t);
+        }
+      }
+      keptTickets.reverse();
+      currentTicketList = keptTickets;
+
+      // Pass 2: Forward Redundancy Clean-Up Pass
+      keptTickets = [];
+      for (let i = 0; i < currentTicketList.length; i++) {
+        if (i > 0 && i % 40 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const t = currentTicketList[i];
+        fill127Draws(t);
+
+        let canRemove = true;
+        for (let j = 0; j < maxCovers; j++) {
+          if (drawCoverage[covList[j]] <= primaryReq) {
+            canRemove = false;
+            break;
+          }
+        }
+
+        if (canRemove) {
+          for (let j = 0; j < maxCovers; j++) {
+            drawCoverage[covList[j]]--;
+          }
+        } else {
+          keptTickets.push(t);
         }
       }
 
-      if (!canRemove) {
-        finalPruned.push(t);
-      } else {
-        // Safely prune ticket!
-        for (let j = 0; j < covList.length; j++) {
-          drawCoverage[covList[j]]--;
+      prunedTickets = keptTickets;
+    } else {
+      // Universal Arbitrary Game Multi-Pass Reverse Pruning (for Any Range, K, R, Target)
+      const allResults = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
+      const rCount = allResults.length;
+      const rLo = new Int32Array(rCount);
+      const rHi = new Int32Array(rCount);
+      for (let i = 0; i < rCount; i++) {
+        rLo[i] = allResults[i].mask.lo;
+        rHi[i] = allResults[i].mask.hi;
+      }
+
+      const univCoverage = new Uint16Array(rCount);
+      const tMasksLo = new Int32Array(selectedTickets.length);
+      const tMasksHi = new Int32Array(selectedTickets.length);
+      for (let i = 0; i < selectedTickets.length; i++) {
+        const m = toMask(selectedTickets[i]);
+        tMasksLo[i] = m.lo;
+        tMasksHi[i] = m.hi;
+        for (let r = 0; r < rCount; r++) {
+          const k = swarPopcount32(m.lo & rLo[r]) + swarPopcount32(m.hi & rHi[r]);
+          if (k >= primaryK) univCoverage[r]++;
         }
       }
+
+      // Pass 1: Reverse Pruning
+      let currentList = selectedTickets.slice();
+      let kept: number[][] = [];
+      let keptLo: number[] = [];
+      let keptHi: number[] = [];
+
+      for (let i = currentList.length - 1; i >= 0; i--) {
+        if (i > 0 && i % 30 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const t = currentList[i];
+        const mLo = tMasksLo[i];
+        const mHi = tMasksHi[i];
+
+        let canRemove = true;
+        for (let r = 0; r < rCount; r++) {
+          const k = swarPopcount32(mLo & rLo[r]) + swarPopcount32(mHi & rHi[r]);
+          if (k >= primaryK) {
+            if (univCoverage[r] <= primaryReq) {
+              canRemove = false;
+              break;
+            }
+          }
+        }
+
+        if (canRemove) {
+          for (let r = 0; r < rCount; r++) {
+            const k = swarPopcount32(mLo & rLo[r]) + swarPopcount32(mHi & rHi[r]);
+            if (k >= primaryK) univCoverage[r]--;
+          }
+        } else {
+          kept.push(t);
+          keptLo.push(mLo);
+          keptHi.push(mHi);
+        }
+      }
+      kept.reverse();
+      keptLo.reverse();
+      keptHi.reverse();
+
+      // Pass 2: Forward Pruning Clean-up
+      const finalKept: number[][] = [];
+      for (let i = 0; i < kept.length; i++) {
+        if (i > 0 && i % 30 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const t = kept[i];
+        const mLo = keptLo[i];
+        const mHi = keptHi[i];
+
+        let canRemove = true;
+        for (let r = 0; r < rCount; r++) {
+          const k = swarPopcount32(mLo & rLo[r]) + swarPopcount32(mHi & rHi[r]);
+          if (k >= primaryK) {
+            if (univCoverage[r] <= primaryReq) {
+              canRemove = false;
+              break;
+            }
+          }
+        }
+
+        if (canRemove) {
+          for (let r = 0; r < rCount; r++) {
+            const k = swarPopcount32(mLo & rLo[r]) + swarPopcount32(mHi & rHi[r]);
+            if (k >= primaryK) univCoverage[r]--;
+          }
+        } else {
+          finalKept.push(t);
+        }
+      }
+
+      prunedTickets = finalKept;
     }
-    finalPruned.reverse();
-    prunedTickets = finalPruned;
   }
 
   // 100% Exhaustive Verification Pass across ALL combinations
@@ -602,7 +787,7 @@ export async function fastGreedyBitsetCover(
     activeConstraints: totalDraws,
     totalCombinations: totalDraws,
     stepName: 'Verification',
-    status: `১০০% ফলাফল স্পেসের সম্পূর্ণ ভেরিফিকেশন অডিট চলছে (${totalDraws.toLocaleString()} ড্র)...`,
+    status: `১০০% ব্রুট-ফোর্স অডিট চলছে: সকল ${totalDraws.toLocaleString()}টি ড্র সম্পূর্ণ যাচাই করা হচ্ছে (FAIL = 0 নিশ্চিতকরণ)...`,
     engine: 'Exhaustive Mathematical Verifier',
   });
 
@@ -629,12 +814,12 @@ export async function fastGreedyBitsetCover(
     }
   );
 
-  const isCompleteSuccess = finalVerification.allTargetsPass;
-  const status: SolverStatus = isCompleteSuccess ? 'PROVED OPTIMAL' : 'BEST FOUND';
+  const isCompleteSuccess = (finalVerification.totalFailDraws ?? 0) === 0 && finalVerification.allTargetsPass;
+  const status: SolverStatus = isCompleteSuccess ? 'PROVED OPTIMAL' : 'INFEASIBLE';
 
   const statusDetail = isCompleteSuccess
-    ? `১০০% নিশ্চিত গ্যারান্টি প্রমাণিত: মোট ${prunedTickets.length}টি টিকিট দ্বারা সকল ${totalDraws.toLocaleString()}টি ড্র সম্পূর্ণ কভার করা হয়েছে (FAIL = 0, ZERO MISS)!`
-    : `অপ্টিমাইজেশন সম্পন্ন হয়েছে: মোট ${prunedTickets.length}টি টিকিট নির্বাচিত হয়েছে।`;
+    ? `১০০% নিশ্চিত গ্যারান্টি প্রমাণিত: Total Tested Draws = ${totalDraws.toLocaleString()} | FAIL Draws = 0 | PASS Draws = ${(finalVerification.totalPassDraws ?? totalDraws).toLocaleString()} (ZERO MISS, 100% COVERED)!`
+    : `সতর্কতা: ${finalVerification.totalFailDraws}টি ড্র মিস হয়েছে! গ্যারান্টি পূরণ হয়নি (FAIL = ${finalVerification.totalFailDraws})।`;
 
   return {
     status,

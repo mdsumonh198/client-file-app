@@ -132,7 +132,7 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     const individualHeaders = sampleTicket.map((_, i) => `N${i + 1}`).join(',');
 
     // Column B has the FULL ticket numbers in 1 single column for easy copying in Google Sheets / Excel
-    const header = `Ticket #,Full Ticket (Single Column),Full Ticket (Space Separated),Match Count,${individualHeaders}`;
+    const header = `Ticket_ID,Full_Ticket,Full_Ticket_Space,Match_Count,${individualHeaders}`;
 
     const rows = exportItems.map((item) => {
       const formattedComma = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
@@ -142,17 +142,19 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
       return `${item.globalIdx},"${formattedComma}","${formattedSpace}",${matchStr},${splitNums}`;
     }).join('\n');
 
-    const csvContent = `data:text/csv;charset=utf-8,\uFEFF${header}\n${rows}`;
-    const encodedUri = encodeURI(csvContent);
+    const csvData = `\uFEFF${header}\n${rows}`;
+    const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.href = url;
     const filename = onlyCurrentTab && currentTab !== 'all'
       ? `tickets_${currentTab}_match.csv`
       : 'tickets_all.csv';
-    link.setAttribute('download', filename);
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // Copy pure 1-column ticket list (e.g. "02, 03, 04, 05, 06, 07\n01, 03, ...")

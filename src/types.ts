@@ -31,6 +31,9 @@ export interface ExactMatchStat {
 export interface VerificationReport {
   totalTickets: number;
   totalResultsChecked: number;
+  totalPassDraws: number;
+  totalFailDraws: number;
+  passRatePct: number;
   stats: Record<number, ExactMatchStat>;
   allTargetsPass: boolean;
   worstCaseOverallResult?: number[];
