@@ -442,6 +442,9 @@ export async function optimizeWithConstraintGeneration(
 
     // Incrementally generate constraint rows ONLY for newly added results (blazing fast)
     for (let r = processedResultCount; r < activeResults.length; r++) {
+      if (r > processedResultCount && (r - processedResultCount) % 30 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       const rLo = activeResults[r].mask.lo;
       const rHi = activeResults[r].mask.hi;
       for (let j = 0; j < targetEntries.length; j++) {
@@ -474,7 +477,7 @@ export async function optimizeWithConstraintGeneration(
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Optimization',
-      status: `Round ${round}: Solving master problem with ${constraintRows.length} constraints (${lastViolationsCount.toLocaleString()} draws remaining)...`,
+      status: `Round ${round}: অপ্টিমাইজার ম্যাট্রিক্স বিশ্লেষণ করছে (${constraintRows.length}টি শর্ত, বাকি ড্র: ${lastViolationsCount.toLocaleString()}টি)...`,
       engine: usedEngine,
     });
 
@@ -515,7 +518,7 @@ export async function optimizeWithConstraintGeneration(
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Verification',
-      status: `Round ${round}: Verifying 100% draw space (${allResults.length.toLocaleString()} draws) with ${currentTickets.length} tickets...`,
+      status: `Round ${round}: ${currentTickets.length}টি টিকিটের কভারেজ অডিট সম্পন্ন (বাকি ড্র: ${lastViolationsCount.toLocaleString()}টি)...`,
       engine: usedEngine,
     });
 
@@ -591,7 +594,7 @@ export async function optimizeWithConstraintGeneration(
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Separation Oracle',
-      status: `Round ${round}: Added ${newlyAdded} cuts (${lastViolationsCount.toLocaleString()} draws remaining)...`,
+      status: `Round ${round}: নতুন ${newlyAdded}টি কাটিং শর্ত যুক্ত করা হয়েছে (বাকি ড্র: ${lastViolationsCount.toLocaleString()}টি)...`,
       engine: usedEngine,
     });
 

@@ -29,6 +29,7 @@ import {
   RefreshCw,
   Server,
   Terminal,
+  Search,
 } from 'lucide-react';
 
 interface LiveActivityLog {
@@ -245,9 +246,12 @@ export const App: React.FC = () => {
       const onProgressHandler = (info: SolverProgressInfo) => {
         setLiveInfo(info);
         setProgressStatus(info.status);
-        const coverageRatio = (info.totalCombinations - (info.violationsCount ?? 0)) / Math.max(1, info.totalCombinations);
+        const total = Math.max(1, info.totalCombinations);
+        const rem = info.violationsCount ?? total;
+        const covered = Math.max(0, total - rem);
+        const covPct = ((covered / total) * 100).toFixed(1);
         const roundRatio = info.round / Math.max(1, info.maxRounds);
-        const pct = Math.min(98, Math.max(12, Math.round((coverageRatio * 0.75 + roundRatio * 0.25) * 86) + 12));
+        const pct = Math.min(98, Math.max(12, Math.round(((covered / total) * 0.75 + roundRatio * 0.25) * 86) + 12));
         setProgressPercent(pct);
 
         if (info.status && info.status !== lastLoggedStatusRef.current) {
@@ -257,7 +261,11 @@ export const App: React.FC = () => {
           else if (info.stepName === 'Optimization') logColor = 'text-cyan-300';
           else if (info.stepName === 'Verification') logColor = 'text-emerald-300';
           else if (info.stepName === 'Initialization') logColor = 'text-indigo-300';
-          addActivityLog(`[Round ${info.round}] ${info.status}`, logColor);
+          
+          addActivityLog(
+            `[Round ${info.round}] ${info.status} (বর্তমান টিকিট: ${info.currentTickets}টি, কভারেজ: ${covPct}%)`,
+            logColor
+          );
         }
       };
 
@@ -625,6 +633,75 @@ export const App: React.FC = () => {
                   <span className="text-[10px] text-slate-500 block truncate">
                     {liveInfo?.violationsCount === 0 ? 'সব ড্র ১০০% কভার্ড' : 'টার্গেট পূরণ বাকি ড্র'}
                   </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Real-time "What is Happening" & "What is Remaining" Status Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Card A: এখন কী হচ্ছে */}
+              <div className="bg-gradient-to-br from-indigo-950/70 via-slate-900 to-slate-950 border border-indigo-500/40 rounded-xl p-3.5 shadow-md">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+                  <span className="text-xs font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Search className="w-3.5 h-3.5 text-cyan-400" />
+                    এখন কী হচ্ছে (Current Task)
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm font-semibold text-slate-100 leading-snug">
+                  {liveInfo?.status || 'সার্ভার মাল্টি-কোর সিপিইউ ইঞ্জিনে অপ্টিমাইজেশন চলছে...'}
+                </p>
+                <div className="mt-2 text-[11px] text-slate-400 flex flex-wrap items-center gap-3">
+                  <span>ধাপ: <b className="text-cyan-300 font-mono">{liveInfo?.stepName || 'Processing'}</b></span>
+                  <span>ইঞ্জিন: <b className="text-indigo-300 font-mono">{liveInfo?.engine || 'Server Turbo CPU'}</b></span>
+                  <span>রাউন্ড: <b className="text-emerald-300 font-mono">{liveInfo?.round || 1} / {liveInfo?.maxRounds || 30}</b></span>
+                </div>
+              </div>
+
+              {/* Card B: কী বাকি আছে */}
+              <div className="bg-gradient-to-br from-amber-950/40 via-slate-900 to-slate-950 border border-amber-500/40 rounded-xl p-3.5 shadow-md">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    কী বাকি আছে (What is Left)
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300">
+                      ঘাটতি ড্র পূরণ বাকি:
+                    </span>
+                    <span className="font-mono font-bold text-rose-400">
+                      {(liveInfo?.violationsCount !== undefined && liveInfo.violationsCount !== null
+                        ? liveInfo.violationsCount
+                        : totalCombosCount
+                      ).toLocaleString()} টি / {totalCombosCount.toLocaleString()} টি
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300">
+                      বর্তমান কভারেজ:
+                    </span>
+                    <span className="font-mono font-bold text-emerald-400">
+                      {(
+                        ((Math.max(
+                          0,
+                          totalCombosCount -
+                            (liveInfo?.violationsCount !== undefined && liveInfo.violationsCount !== null
+                              ? liveInfo.violationsCount
+                              : totalCombosCount)
+                        )) /
+                          Math.max(1, totalCombosCount)) *
+                        100
+                      ).toFixed(2)}% অর্জিত
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 text-[10px] text-amber-300/90 font-medium">
+                  {liveInfo?.violationsCount === 0
+                    ? '🎉 অভিনন্দন! সব ড্র ১০০% কভার হয়ে গেছে!'
+                    : '🎯 টার্গেট পূরণ হলে স্বয়ংক্রিয়ভাবে থামবে। যেকোনো সময় মাঝপথের টিকিট নিতে উপরের "এখনই নিন" চাপতে পারেন।'}
                 </div>
               </div>
             </div>

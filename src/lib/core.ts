@@ -155,11 +155,19 @@ export interface CombinationItem {
   mask: BitMask;
 }
 
+const combinationsCache = new Map<string, CombinationItem[]>();
+
 export function allCombinationsWithMasks(
   numberFrom: number,
   numberTo: number,
   k: number
 ): CombinationItem[] {
+  const cacheKey = `${numberFrom}_${numberTo}_${k}`;
+  const cached = combinationsCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const result: CombinationItem[] = [];
   const range: number[] = [];
   for (let i = numberFrom; i <= numberTo; i++) {
@@ -187,6 +195,10 @@ export function allCombinationsWithMasks(
   }
 
   backtrack(0, 0);
+  // Cache the generated combination space (up to ~500k combinations is < 40MB)
+  if (result.length <= 600000) {
+    combinationsCache.set(cacheKey, result);
+  }
   return result;
 }
 
