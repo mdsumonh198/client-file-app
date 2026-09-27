@@ -7,7 +7,12 @@ import { TicketsView } from './components/TicketsView';
 import { VerificationReportView } from './components/VerificationReportView';
 import { ResultSimulator } from './components/ResultSimulator';
 import { SolverProgressInfo } from './lib/solver';
-import { runOptimizationWithWorker, OptimizerController } from './lib/workerClient';
+import { runOptimizationWithWorker } from './lib/workerClient';
+import {
+  fetchSystemInfo,
+  runOptimizationWithServer,
+  SystemHardwareInfo,
+} from './lib/serverClient';
 import {
   ShieldCheck,
   Rocket,
@@ -22,6 +27,7 @@ import {
   Layers,
   Ticket,
   RefreshCw,
+  Server,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -41,12 +47,27 @@ export const App: React.FC = () => {
   const [liveInfo, setLiveInfo] = useState<SolverProgressInfo | null>(null);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
 
+  const [engineMode, setEngineMode] = useState<'server' | 'browser'>('server');
+  const [serverHardware, setServerHardware] = useState<SystemHardwareInfo | null>(null);
+
   const [result, setResult] = useState<OptimizationResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeDrawnResult, setActiveDrawnResult] = useState<number[]>([]);
 
   const stopRequestedRef = useRef<boolean>(false);
   const timerIntervalRef = useRef<any>(null);
+
+  // Check server hardware capabilities on mount
+  useEffect(() => {
+    fetchSystemInfo().then((info) => {
+      if (info) {
+        setServerHardware(info);
+        setEngineMode('server');
+      } else {
+        setEngineMode('browser');
+      }
+    });
+  }, []);
 
   // Live timer while solving
   useEffect(() => {
@@ -76,7 +97,7 @@ export const App: React.FC = () => {
   };
 
   const [showLiveTicketsPreview, setShowLiveTicketsPreview] = useState<boolean>(false);
-  const optimizerControllerRef = useRef<OptimizerController | null>(null);
+  const optimizerControllerRef = useRef<{ stop: () => void; terminate: () => void; promise?: Promise<OptimizationResult> } | null>(null);
 
   const handleCancelAndReset = () => {
     if (optimizerControllerRef.current) {
@@ -127,27 +148,48 @@ export const App: React.FC = () => {
     setIsSolving(true);
     setProgressPercent(10);
     setLiveInfo(null);
-    setProgressStatus('Starting optimization engine...');
+    setProgressStatus(
+      engineMode === 'server'
+        ? `Connecting to Server CPU Engine (${serverHardware?.cpuCores || 'Multi'} Cores)...`
+        : 'Starting Browser Web Worker...'
+    );
 
     try {
-      const controller = runOptimizationWithWorker({
-        numberFrom: config.numberFrom,
-        numberTo: config.numberTo,
-        ticketSize: config.ticketSize,
-        resultSize: config.resultSize,
-        targets,
-        timeLimitSeconds: timeLimit,
-        seedConstraintCount: 35,
-        maxRounds: 200,
-        onProgress: (info) => {
-          setLiveInfo(info);
-          setProgressStatus(info.status);
+      let controller: { stop: () => void; terminate: () => void; promise: Promise<OptimizationResult> };
 
-          // Dynamic progress estimate based on rounds
-          const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
-          setProgressPercent(pct);
-        },
-      });
+      if (engineMode === 'server') {
+        controller = runOptimizationWithServer({
+          config,
+          targets,
+          options: {
+            timeLimitSeconds: timeLimit,
+            maxRounds: 200,
+          },
+          onProgress: (info) => {
+            setLiveInfo(info);
+            setProgressStatus(info.status);
+            const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
+            setProgressPercent(pct);
+          },
+        });
+      } else {
+        controller = runOptimizationWithWorker({
+          numberFrom: config.numberFrom,
+          numberTo: config.numberTo,
+          ticketSize: config.ticketSize,
+          resultSize: config.resultSize,
+          targets,
+          timeLimitSeconds: timeLimit,
+          seedConstraintCount: 35,
+          maxRounds: 200,
+          onProgress: (info) => {
+            setLiveInfo(info);
+            setProgressStatus(info.status);
+            const pct = Math.min(96, Math.max(15, Math.round((info.round / Math.min(info.maxRounds, 50)) * 75) + 15));
+            setProgressPercent(pct);
+          },
+        });
+      }
 
       optimizerControllerRef.current = controller;
       const optResult = await controller.promise;
@@ -255,15 +297,33 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Engine Environment Selector */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Server className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Compute Engine:</span>
+                <select
+                  value={engineMode}
+                  onChange={(e) => setEngineMode(e.target.value as 'server' | 'browser')}
+                  disabled={isSolving}
+                  className="bg-slate-950 border border-cyan-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                >
+                  <option value="server">
+                    🚀 Server Turbo ({serverHardware ? `${serverHardware.cpuCores} Core CPU / ${serverHardware.totalMemoryGB}GB RAM` : 'VPS CPU'})
+                  </option>
+                  <option value="browser">💻 Browser Web Worker (Local)</option>
+                </select>
+              </div>
+
+              {/* Time Limit Selector */}
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Sliders className="w-3.5 h-3.5 text-slate-500" />
-                <span>Solver Mode / Limit:</span>
+                <span>Limit:</span>
                 <select
                   value={timeLimit}
                   onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
                   disabled={isSolving}
-                  className="bg-slate-950 border border-indigo-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="bg-slate-950 border border-indigo-500/40 text-xs text-indigo-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                   <option value={0}>&infin; No Limit (Run Until Solved / Proved)</option>
                   <option value={300}>5 Minutes (300s)</option>
