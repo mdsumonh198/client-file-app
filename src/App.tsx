@@ -875,6 +875,7 @@ export const App: React.FC = () => {
               rounds={result.rounds}
               durationMs={result.durationMs}
               solverEngine={result.solverEngine}
+              tickets={result.tickets}
               onSelectResultToTest={(res) => setActiveDrawnResult(res)}
             />
 

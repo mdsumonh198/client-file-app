@@ -1,6 +1,6 @@
 import React from 'react';
 import { VerificationReport, SolverStatus } from '../types';
-import { Download, Award, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { Download, Award, AlertTriangle, CheckCircle2, XCircle, Ticket as TicketIcon } from 'lucide-react';
 
 interface VerificationReportViewProps {
   report: VerificationReport;
@@ -9,6 +9,7 @@ interface VerificationReportViewProps {
   rounds: number;
   durationMs: number;
   solverEngine?: string;
+  tickets?: number[][];
   onSelectResultToTest?: (result: number[]) => void;
 }
 
@@ -19,6 +20,7 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   rounds: _rounds,
   durationMs,
   solverEngine,
+  tickets = [],
   onSelectResultToTest,
 }) => {
   // Guarantee stats (e.g. 5+ Matches: at least 5 or 6 matches)
@@ -29,16 +31,18 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
   // Individual exact match breakdown rows (sorted descending from Jackpot down to 0)
   const exactBreakdownList = Object.values(report.stats).sort((a, b) => b.k - a.k);
 
-  const handleDownloadCSV = () => {
+  // Download Full CSV containing Audit Proof + 100% of Generated Tickets
+  const handleDownloadFullCSV = () => {
     const summaryRows = [
-      `Total Selected Tickets,${report.totalTickets}`,
+      `--- LOTTERY MATHEMATICAL GUARANTEE PROOF & TICKET LIST ---`,
+      `Total Selected Tickets,${tickets.length > 0 ? tickets.length : report.totalTickets}`,
       `Total Tested Draws,${report.totalResultsChecked}`,
       `PASS Draws (Guarantee Target),${report.totalPassDraws ?? report.totalResultsChecked}`,
       `FAIL Draws (Misses),${report.totalFailDraws ?? 0}`,
       `Guaranteed Worst-Case Wins,${report.primaryGuaranteeStat ? `At least ${report.primaryGuaranteeStat.min} ticket(s)` : 'At least 1 ticket'}`,
       `Pass Rate,${report.passRatePct !== undefined ? `${report.passRatePct.toFixed(2)}%` : '100%'}`,
       `Zero-Miss Status,${report.allTargetsPass ? '100% ZERO-MISS PROVEN' : 'FAIL'}`,
-      `Match Rule,Strict Intersection (Guarantee target met on every draw)`,
+      `Match Rule,Strict Intersection (Guarantee target met on every single draw)`,
       '',
     ].join('\n');
 
@@ -56,26 +60,64 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
     ].join(',');
 
     const gRows = guaranteeList.map((g) => {
-      const worst = g.worstResult.join(';');
-      const best = g.bestResult.join(';');
+      const worst = g.worstResult.join(' ');
+      const best = g.bestResult.join(' ');
       return `"${g.label || `${g.k}+ Matches (Guarantee Target)`}",${g.min},${g.max},${g.avg},${g.variance},${g.stdDev},">= ${g.requiredTarget || 1}",${g.passed ? 'PASS' : 'FAIL'},"${worst}","${best}"`;
     });
 
-    const rows = exactBreakdownList.map((s) => {
+    const statRows = exactBreakdownList.map((s) => {
       const targetStr = s.requiredTarget !== undefined ? `>= ${s.requiredTarget}` : '-';
       const statusStr = s.requiredTarget !== undefined ? (s.passed ? 'PASS' : 'FAIL') : '-';
-      const worst = s.worstResult.join(';');
-      const best = s.bestResult.join(';');
+      const worst = s.worstResult.join(' ');
+      const best = s.bestResult.join(' ');
       return `"${s.label || `Exact ${s.k}`}",${s.min},${s.max},${s.avg},${s.variance},${s.stdDev},"${targetStr}",${statusStr},"${worst}","${best}"`;
     });
 
-    const allDataRows = [...gRows, ...rows];
-    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${allDataRows.join('\n')}`;
+    // Complete generated ticket list section
+    const ticketK = tickets.length > 0 ? tickets[0].length : 6;
+    const ticketHeaders = ['Ticket #', 'Full Combination', ...Array.from({ length: ticketK }, (_, i) => `Num ${i + 1}`)].join(',');
+    
+    const ticketRows = tickets.map((t, idx) => {
+      const formattedComma = t.map((n) => String(n).padStart(2, '0')).join(', ');
+      return `${idx + 1},"${formattedComma}",${t.join(',')}`;
+    });
+
+    const ticketSection = [
+      '',
+      `--- COMPLETE GENERATED TICKET LIST (সম্পূর্ণ টিকেট তালিকা - মোট ${tickets.length}টি টিকেট) ---`,
+      ticketHeaders,
+      ...ticketRows,
+    ].join('\n');
+
+    const csvContent = `\uFEFF${summaryRows}\n${headers}\n${[...gRows, ...statRows].join('\n')}\n${ticketSection}`;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'lottery_guarantee_verification.csv';
+    link.download = 'lottery_guarantee_and_tickets.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // Download Clean Tickets Only (CSV) for direct upload or printing
+  const handleDownloadTicketsOnlyCSV = () => {
+    if (tickets.length === 0) return;
+    const ticketK = tickets[0].length;
+    const individualHeaders = Array.from({ length: ticketK }, (_, i) => `N${i + 1}`).join(',');
+    const header = `Ticket_ID,Full_Ticket,${individualHeaders}`;
+    const rows = tickets.map((t, idx) => {
+      const formatted = t.map((n) => String(n).padStart(2, '0')).join(', ');
+      return `${idx + 1},"${formatted}",${t.join(',')}`;
+    }).join('\n');
+
+    const csvContent = `\uFEFF${header}\n${rows}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'optimized_tickets_list.csv';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -117,7 +159,7 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
 
   return (
     <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-5 shadow-lg backdrop-blur-sm">
-      {/* Header and status badge */}
+      {/* Header, status badge and download actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 mb-4 border-b border-slate-700/70 gap-3">
         <div>
           <div className="flex items-center gap-3">
@@ -132,14 +174,29 @@ export const VerificationReportView: React.FC<VerificationReportViewProps> = ({
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={handleDownloadCSV}
-          className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors shrink-0"
-        >
-          <Download className="w-3.5 h-3.5" />
-          Download Verification CSV
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleDownloadFullCSV}
+            className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-2 rounded-lg shadow-md transition-colors shrink-0"
+            title="Download CSV containing full verification audit and all generated tickets"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download All Tickets & Audit (CSV)</span>
+          </button>
+
+          {tickets.length > 0 && (
+            <button
+              type="button"
+              onClick={handleDownloadTicketsOnlyCSV}
+              className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition-colors shrink-0"
+              title="Download clean CSV of tickets only for printing or submission"
+            >
+              <TicketIcon className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Tickets Only (CSV)</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Summary KPI Cards - Exact User Audit Specifications */}
