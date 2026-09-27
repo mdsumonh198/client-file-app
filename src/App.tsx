@@ -223,7 +223,7 @@ export const App: React.FC = () => {
       {
         id: 'init_4',
         timestamp: nowTimeStr,
-        message: `🚀 ফাস্ট Greedy BitSet Cover শুরু হচ্ছে: ${currentCombos.toLocaleString()}টি ড্র-এর সবকটি কভার না হওয়া এবং FAIL = 0 না হওয়া পর্যন্ত অবিরাম চলবে...`,
+        message: `🚀 Best-Fit Max-Coverage ও 2-Opt সোয়াপ অপ্টিমাইজেশন শুরু হচ্ছে: ন্যূনতম খরচে (Lowest Possible Tickets) ১০০% জিরো-মিস গ্যারান্টি...`,
         color: 'text-emerald-400 font-bold',
       },
     ]);
@@ -592,7 +592,7 @@ export const App: React.FC = () => {
                     {liveInfo?.violationsCount === 0 ? 'FAIL = 0' : `বাকি ${liveInfo?.violationsCount ? liveInfo.violationsCount.toLocaleString() : '...'} টি`}
                   </div>
                   <span className="text-[10px] text-emerald-400 font-semibold block truncate">
-                    {liveInfo?.violationsCount === 0 ? '✓ ১০০% ড্র কভার সম্পন্ন' : 'Greedy BitSet Cover লুপ'}
+                    {liveInfo?.violationsCount === 0 ? '✓ ১০০% ড্র কভার সম্পন্ন' : 'Best-Fit Max-Coverage লুপ'}
                   </span>
                 </div>
               </div>

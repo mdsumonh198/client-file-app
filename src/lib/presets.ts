@@ -2,6 +2,16 @@ import { GamePreset } from '../types';
 
 export const PRESETS: GamePreset[] = [
   {
+    id: 'optimal-c27-6-6-5',
+    name: 'C(27, 6, 6, 5) - World-Class Guarantee (27 numbers)',
+    description: 'Mathematical target ~2,330 to 2,400 tickets: Exact 5 >= 1 guarantee for 6-from-27 lottery.',
+    from: 1,
+    to: 27,
+    ticketSize: 6,
+    resultSize: 6,
+    targets: { 5: 1 },
+  },
+  {
     id: 'developer-brief-sample',
     name: 'Developer Brief Demo (6 from 1..15)',
     description: 'Exact 3 >= 1, Exact 2 >= 3 guarantee wheel for fast interactive demonstration.',
