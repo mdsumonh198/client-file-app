@@ -114,13 +114,35 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     return filteredTickets.slice(start, start + pageSize);
   }, [filteredTickets, page]);
 
-  const handleDownloadCSV = (onlyCurrentTab: boolean = false) => {
-    const exportList = onlyCurrentTab ? filteredTickets.map((item) => item.ticket) : tickets;
-    if (exportList.length === 0) return;
+  const [copiedSingleCol, setCopiedSingleCol] = useState(false);
+  const [copiedTicketId, setCopiedTicketId] = useState<number | null>(null);
 
-    const header = exportList[0].map((_, i) => `N${i + 1}`).join(',');
-    const rows = exportList.map((t) => t.join(',')).join('\n');
-    const csvContent = `data:text/csv;charset=utf-8,${header}\n${rows}`;
+  const handleDownloadCSV = (onlyCurrentTab: boolean = false) => {
+    const exportItems = onlyCurrentTab
+      ? filteredTickets
+      : tickets.map((t, idx) => ({
+          ticket: t,
+          globalIdx: idx + 1,
+          matchCount: ticketMatches ? ticketMatches[idx] : null,
+        }));
+
+    if (exportItems.length === 0) return;
+
+    const sampleTicket = exportItems[0].ticket;
+    const individualHeaders = sampleTicket.map((_, i) => `N${i + 1}`).join(',');
+
+    // Column B has the FULL ticket numbers in 1 single column for easy copying in Google Sheets / Excel
+    const header = `Ticket #,Full Ticket (Single Column),Full Ticket (Space Separated),Match Count,${individualHeaders}`;
+
+    const rows = exportItems.map((item) => {
+      const formattedComma = item.ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+      const formattedSpace = item.ticket.map((n) => String(n).padStart(2, '0')).join(' ');
+      const matchStr = item.matchCount !== null ? item.matchCount : '';
+      const splitNums = item.ticket.join(',');
+      return `${item.globalIdx},"${formattedComma}","${formattedSpace}",${matchStr},${splitNums}`;
+    }).join('\n');
+
+    const csvContent = `data:text/csv;charset=utf-8,\uFEFF${header}\n${rows}`;
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -133,16 +155,38 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
     document.body.removeChild(link);
   };
 
+  // Copy pure 1-column ticket list (e.g. "02, 03, 04, 05, 06, 07\n01, 03, ...")
+  const handleCopySingleColumn = (onlyCurrentTab: boolean = false) => {
+    const exportItems = onlyCurrentTab
+      ? filteredTickets
+      : tickets.map((t, idx) => ({ ticket: t, globalIdx: idx + 1, matchCount: null }));
+    if (exportItems.length === 0) return;
+
+    const text = exportItems
+      .map((item) => item.ticket.map((n) => String(n).padStart(2, '0')).join(', '))
+      .join('\n');
+    navigator.clipboard.writeText(text);
+    setCopiedSingleCol(true);
+    setTimeout(() => setCopiedSingleCol(false), 2000);
+  };
+
   const handleCopyClipboard = (onlyCurrentTab: boolean = false) => {
     const exportList = onlyCurrentTab ? filteredTickets : tickets.map((t, idx) => ({ ticket: t, globalIdx: idx + 1, matchCount: null }));
     if (exportList.length === 0) return;
 
     const text = exportList
-      .map((item) => `Ticket #${item.globalIdx}: ${item.ticket.join(', ')}`)
+      .map((item) => `Ticket #${item.globalIdx}: ${item.ticket.map((n) => String(n).padStart(2, '0')).join(', ')}`)
       .join('\n');
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopySingleTicket = (ticket: number[], idx: number) => {
+    const text = ticket.map((n) => String(n).padStart(2, '0')).join(', ');
+    navigator.clipboard.writeText(text);
+    setCopiedTicketId(idx);
+    setTimeout(() => setCopiedTicketId(null), 1500);
   };
 
   if (tickets.length === 0) {
@@ -182,23 +226,35 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Copy 1-Column Format (Directly ready to paste into 1 column of Google Sheets / Excel) */}
+          <button
+            type="button"
+            onClick={() => handleCopySingleColumn(currentTab !== 'all')}
+            className="flex items-center gap-1.5 text-xs bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 px-3 py-1.5 rounded-lg border border-emerald-500/40 transition-colors cursor-pointer font-semibold shadow-sm"
+            title="১টি কলামে লাইন বাই লাইন পুরো টিকেট কপি করুন (সহজে শিটে পেস্ট করার জন্য)"
+          >
+            {copiedSingleCol ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            {copiedSingleCol ? 'Copied 1-Col!' : currentTab !== 'all' ? `Copy 1-Col (${currentTab}-Match)` : 'Copy 1-Column List'}
+          </button>
+
           <button
             type="button"
             onClick={() => handleCopyClipboard(currentTab !== 'all')}
             className="flex items-center gap-1.5 text-xs bg-slate-900 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer"
-            title={currentTab !== 'all' ? `Copy only ${currentTab}-match tickets` : 'Copy all tickets'}
+            title={currentTab !== 'all' ? `Copy only ${currentTab}-match tickets with ID` : 'Copy all tickets with ID'}
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? 'Copied!' : currentTab !== 'all' ? `Copy ${currentTab}-Match` : 'Copy Tickets'}
+            {copied ? 'Copied!' : 'Copy with #ID'}
           </button>
+
           <button
             type="button"
             onClick={() => handleDownloadCSV(currentTab !== 'all')}
-            className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-3 py-1.5 rounded-lg shadow transition-colors cursor-pointer"
-            title={currentTab !== 'all' ? `Download only ${currentTab}-match tickets` : 'Download all tickets'}
+            className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-3 py-1.5 rounded-lg shadow transition-colors cursor-pointer"
+            title="Download CSV (শিটের কলাম B-তে পুরো টিকেট নম্বর ১টি সেলে থাকবে)"
           >
             <Download className="w-3.5 h-3.5" />
-            {currentTab !== 'all' ? `Download ${currentTab}-Match CSV` : 'Download CSV'}
+            {currentTab !== 'all' ? `Download ${currentTab}-Match CSV` : 'Download CSV (1-Col Sheet)'}
           </button>
         </div>
       </div>
@@ -453,24 +509,40 @@ export const TicketsView: React.FC<TicketsViewProps> = ({
                   })}
                 </div>
 
-                {/* Match Badge */}
-                {matchCount !== null && (
-                  <span
-                    className={`ml-2 text-[10px] font-bold px-2 py-0.5 rounded shrink-0 border ${
-                      matchCount >= 5
-                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 ring-1 ring-amber-400/30'
-                        : matchCount === 4
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                        : matchCount === 3
-                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                        : matchCount === 2
-                        ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                        : 'bg-slate-800 text-slate-400 border-slate-700'
-                    }`}
+                <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                  {/* Match Badge */}
+                  {matchCount !== null && (
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                        matchCount >= 5
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 ring-1 ring-amber-400/30'
+                          : matchCount === 4
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : matchCount === 3
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                          : matchCount === 2
+                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                    >
+                      {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+                    </span>
+                  )}
+
+                  {/* Individual Ticket Copy Icon */}
+                  <button
+                    type="button"
+                    onClick={() => handleCopySingleTicket(ticket, globalIdx)}
+                    className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="এই পুরো টিকেট নম্বর কপি করুন"
                   >
-                    {matchCount} {matchCount === 1 ? 'match' : 'matches'}
-                  </span>
-                )}
+                    {copiedTicketId === globalIdx ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
             );
           })}
