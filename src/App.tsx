@@ -47,7 +47,9 @@ export const App: React.FC = () => {
   const [liveInfo, setLiveInfo] = useState<SolverProgressInfo | null>(null);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
 
-  const [engineMode, setEngineMode] = useState<'server' | 'browser'>('server');
+  const [engineMode, setEngineMode] = useState<'server' | 'browser'>(() => {
+    return (localStorage.getItem('preferred_engine_mode') as 'server' | 'browser') || 'server';
+  });
   const [serverHardware, setServerHardware] = useState<SystemHardwareInfo | null>(null);
 
   const [result, setResult] = useState<OptimizationResult | null>(null);
@@ -57,17 +59,19 @@ export const App: React.FC = () => {
   const stopRequestedRef = useRef<boolean>(false);
   const timerIntervalRef = useRef<any>(null);
 
-  // Check server hardware capabilities on mount
+  // Check server hardware capabilities on mount (always keep VPS/Server Turbo as default)
   useEffect(() => {
     fetchSystemInfo().then((info) => {
       if (info) {
         setServerHardware(info);
-        setEngineMode('server');
-      } else {
-        setEngineMode('browser');
       }
     });
   }, []);
+
+  const handleEngineChange = (mode: 'server' | 'browser') => {
+    setEngineMode(mode);
+    localStorage.setItem('preferred_engine_mode', mode);
+  };
 
   // Live timer while solving
   useEffect(() => {
@@ -331,7 +335,7 @@ export const App: React.FC = () => {
                 <span>Compute Engine:</span>
                 <select
                   value={engineMode}
-                  onChange={(e) => setEngineMode(e.target.value as 'server' | 'browser')}
+                  onChange={(e) => handleEngineChange(e.target.value as 'server' | 'browser')}
                   disabled={isSolving}
                   className="bg-slate-950 border border-cyan-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 >
