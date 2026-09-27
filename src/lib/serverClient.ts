@@ -26,6 +26,60 @@ export async function fetchSystemInfo(): Promise<SystemHardwareInfo | null> {
   }
 }
 
+async function pollSessionUntilComplete(
+  sessionId: string,
+  abortSignal: AbortSignal,
+  onProgress?: (info: SolverProgressInfo) => void
+): Promise<OptimizationResult> {
+  let consecutiveErrors = 0;
+  while (!abortSignal.aborted) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (abortSignal.aborted) {
+      throw new Error('Operation cancelled by user.');
+    }
+
+    try {
+      const res = await fetch(`/api/optimize/session/${sessionId}`, { signal: abortSignal });
+      if (!res.ok) {
+        consecutiveErrors++;
+        if (consecutiveErrors > 15) {
+          throw new Error('Lost connection to server optimization session.');
+        }
+        continue;
+      }
+      consecutiveErrors = 0;
+      const data = await res.json();
+
+      if (data.lastProgress) {
+        onProgress?.(data.lastProgress);
+      }
+
+      if (data.status === 'completed' && data.result) {
+        return data.result;
+      }
+
+      if (data.status === 'error') {
+        throw new Error(data.error || 'Server optimization encountered an error');
+      }
+
+      if (data.status === 'stopped') {
+        if (data.result) return data.result;
+        throw new Error('Server optimization was stopped.');
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw new Error('Operation cancelled by user.');
+      }
+      consecutiveErrors++;
+      if (consecutiveErrors > 15) {
+        throw err;
+      }
+    }
+  }
+
+  throw new Error('Operation cancelled by user.');
+}
+
 export function runOptimizationWithServer(params: {
   config: GameConfig;
   targets: TargetMap;
@@ -126,14 +180,39 @@ export function runOptimizationWithServer(params: {
       }
       dispatchCurrentEvent();
 
+      // If SSE connection closed without a final done event (e.g. proxy timeout / WiFi drop),
+      // seamlessly reconnect/poll session on the server instead of failing!
       if (!isDone) {
-        reject(new Error('Optimization stream ended unexpectedly without final result.'));
+        try {
+          const polledResult = await pollSessionUntilComplete(
+            sessionId,
+            abortController.signal,
+            onProgress
+          );
+          isDone = true;
+          resolve(polledResult);
+        } catch (pollErr: any) {
+          if (!isDone) {
+            reject(pollErr);
+          }
+        }
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         reject(new Error('Operation cancelled by user.'));
-      } else {
-        reject(err);
+      } else if (!isDone) {
+        // Attempt recovery via session poll
+        try {
+          const polledResult = await pollSessionUntilComplete(
+            sessionId,
+            abortController.signal,
+            onProgress
+          );
+          isDone = true;
+          resolve(polledResult);
+        } catch {
+          reject(err);
+        }
       }
     }
   });

@@ -4,12 +4,34 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { runOptimization } from './src/lib/solver';
-import { GameConfig, TargetMap } from './src/types';
+import { GameConfig, TargetMap, OptimizationResult } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const activeSessions = new Map<string, { stop: () => void }>();
+interface OptimizationSession {
+  id: string;
+  status: 'running' | 'completed' | 'error' | 'stopped';
+  stop: () => void;
+  lastProgress?: any;
+  result?: OptimizationResult;
+  error?: string;
+  updatedAt: number;
+  disconnectTimer?: NodeJS.Timeout;
+}
+
+const activeSessions = new Map<string, OptimizationSession>();
+
+// Cleanup stale sessions older than 30 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, sess] of activeSessions.entries()) {
+    if (now - sess.updatedAt > 30 * 60 * 1000) {
+      if (sess.disconnectTimer) clearTimeout(sess.disconnectTimer);
+      activeSessions.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
 
 async function startServer() {
   const app = express();
@@ -31,19 +53,38 @@ async function startServer() {
     });
   });
 
+  // Query active session state (resilient reconnect/polling fallback)
+  app.get('/api/optimize/session/:sessionId', (req: Request, res: Response) => {
+    const { sessionId } = req.params;
+    const session = activeSessions.get(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found or expired' });
+      return;
+    }
+    res.json({
+      sessionId: session.id,
+      status: session.status,
+      lastProgress: session.lastProgress,
+      result: session.result,
+      error: session.error,
+    });
+  });
+
   // Stop / Cancel active session
   app.post('/api/optimize/stop', (req: Request, res: Response) => {
     const { sessionId } = req.body;
     if (sessionId && activeSessions.has(sessionId)) {
-      activeSessions.get(sessionId)?.stop();
-      activeSessions.delete(sessionId);
+      const session = activeSessions.get(sessionId)!;
+      session.status = 'stopped';
+      session.stop();
+      if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
       res.json({ status: 'stopped' });
     } else {
       res.json({ status: 'not_found' });
     }
   });
 
-  // Server-side High-Performance Solver API (Server-Sent Events)
+  // Server-side High-Performance Solver API (Server-Sent Events with persistent state)
   app.post('/api/optimize', async (req: Request, res: Response) => {
     const { config, targets, options, sessionId } = req.body as {
       config: GameConfig;
@@ -57,40 +98,73 @@ async function startServer() {
       return;
     }
 
+    // Disable socket timeouts so long-running MIP optimizations are never killed
+    req.socket.setTimeout(0);
+    req.socket.setKeepAlive(true, 1000);
+    res.setTimeout(0);
+
     // Set headers for Server-Sent Events (SSE)
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering (Nginx, etc.)
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable Nginx / Cloudflare proxy buffering
     res.flushHeaders();
 
     const currentSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     let stopRequested = false;
 
-    // Send keepalive comments every 3 seconds to prevent intermediate proxy / browser timeouts
+    // Retrieve or initialize session state
+    let session = activeSessions.get(currentSessionId);
+    if (session) {
+      if (session.disconnectTimer) {
+        clearTimeout(session.disconnectTimer);
+        session.disconnectTimer = undefined;
+      }
+    } else {
+      session = {
+        id: currentSessionId,
+        status: 'running',
+        stop: () => {
+          stopRequested = true;
+        },
+        updatedAt: Date.now(),
+      };
+      activeSessions.set(currentSessionId, session);
+    }
+
+    // Send frequent keepalive comments to prevent proxy / browser timeouts
     const keepAliveTimer = setInterval(() => {
       try {
         res.write(': keepalive\n\n');
+        (res as any).flush?.();
       } catch {
-        // Connection closed
+        // Socket closed
       }
-    }, 3000);
+    }, 1500);
 
-    activeSessions.set(currentSessionId, {
-      stop: () => {
-        stopRequested = true;
-      },
-    });
+    const sendEvent = (event: string, data: any) => {
+      try {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        (res as any).flush?.();
+      } catch {
+        // Socket error
+      }
+    };
 
     req.on('close', () => {
       clearInterval(keepAliveTimer);
-      stopRequested = true;
-      activeSessions.delete(currentSessionId);
+      // Do NOT instantly abort computation on transient network blip!
+      // Give a 60-second grace period for reconnect/polling before terminating
+      if (session && session.status === 'running') {
+        session.disconnectTimer = setTimeout(() => {
+          if (session && session.status === 'running') {
+            stopRequested = true;
+            session.status = 'stopped';
+            activeSessions.delete(currentSessionId);
+          }
+        }, 60000);
+      }
     });
-
-    const sendEvent = (event: string, data: any) => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
 
     try {
       sendEvent('session', { sessionId: currentSessionId });
@@ -100,17 +174,34 @@ async function startServer() {
         maxRounds: options?.maxRounds,
         shouldStop: () => stopRequested,
         onProgress: (info) => {
+          if (session) {
+            session.lastProgress = info;
+            session.updatedAt = Date.now();
+          }
           sendEvent('progress', info);
         },
       });
 
+      if (session) {
+        session.status = 'completed';
+        session.result = result;
+        session.updatedAt = Date.now();
+      }
+
       sendEvent('done', result);
     } catch (err: any) {
-      sendEvent('error', { message: err?.message || 'Server optimization encountered an error' });
+      const errMsg = err?.message || 'Server optimization encountered an error';
+      if (session) {
+        session.status = 'error';
+        session.error = errMsg;
+        session.updatedAt = Date.now();
+      }
+      sendEvent('error', { message: errMsg });
     } finally {
       clearInterval(keepAliveTimer);
-      activeSessions.delete(currentSessionId);
-      res.end();
+      try {
+        res.end();
+      } catch {}
     }
   });
 
