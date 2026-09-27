@@ -510,15 +510,19 @@ export const App: React.FC = () => {
               {/* Metric 4: Uncovered Violations */}
               <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-3 flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-400 text-[11px] font-semibold">
-                  <span>Remaining Deficit</span>
+                  <span>ঘাটতি ড্র (Pending)</span>
                   <Activity className="w-4 h-4 text-rose-400" />
                 </div>
                 <div className="mt-1">
-                  <div className="text-xl sm:text-2xl font-black text-rose-300 font-mono">
-                    {liveInfo?.violationsCount !== undefined ? `${liveInfo.violationsCount}` : '...'}
+                  <div className="text-lg sm:text-xl font-black text-rose-300 font-mono">
+                    {liveInfo?.violationsCount !== undefined
+                      ? liveInfo.stepName === 'Initialization'
+                        ? 'স্ক্যান হচ্ছে...'
+                        : `${liveInfo.violationsCount.toLocaleString()} টি`
+                      : '...'}
                   </div>
                   <span className="text-[10px] text-slate-500 block truncate">
-                    Draws pending coverage
+                    {liveInfo?.violationsCount === 0 ? 'সব ড্র ১০০% কভার্ড' : 'টার্গেট পূরণ বাকি ড্র'}
                   </span>
                 </div>
               </div>

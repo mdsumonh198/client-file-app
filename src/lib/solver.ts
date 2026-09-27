@@ -346,13 +346,14 @@ export async function optimizeWithConstraintGeneration(
   let isProvedOptimal = false;
   let usedEngine = 'Exact MILP Solver';
   let constraintsAdded = activeResults.length;
+  let lastViolationsCount = allResults.length;
 
   onProgress?.({
     round: 1,
     maxRounds,
     currentTickets: 0,
     currentTicketList: [],
-    violationsCount: 0,
+    violationsCount: lastViolationsCount,
     activeConstraints: activeResults.length,
     totalCombinations: allResults.length,
     stepName: 'Initialization',
@@ -400,11 +401,11 @@ export async function optimizeWithConstraintGeneration(
       maxRounds,
       currentTickets: currentTickets.length,
       currentTicketList: currentTickets,
-      violationsCount: 0,
+      violationsCount: lastViolationsCount,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Optimization',
-      status: `Round ${round}: Solving master problem with ${constraintRows.length} constraints...`,
+      status: `Round ${round}: Solving master problem with ${constraintRows.length} constraints (${lastViolationsCount.toLocaleString()} draws remaining)...`,
       engine: usedEngine,
     });
 
@@ -441,7 +442,7 @@ export async function optimizeWithConstraintGeneration(
       maxRounds,
       currentTickets: currentTickets.length,
       currentTicketList: currentTickets,
-      violationsCount: 0,
+      violationsCount: lastViolationsCount,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Verification',
@@ -453,7 +454,7 @@ export async function optimizeWithConstraintGeneration(
 
     // Adaptive cutting plane batch size: for larger spaces, taking 100-250 deep cuts converges 3-4x faster
     const cutsToSelect = Math.min(250, Math.max(90, Math.floor(Math.sqrt(allResults.length) * 0.45)));
-    const violations = findViolatingResults(
+    const { cuts: violations, totalViolatingDraws } = findViolatingResults(
       numberFrom,
       numberTo,
       resultSize,
@@ -463,7 +464,9 @@ export async function optimizeWithConstraintGeneration(
       activeSet
     );
 
-    if (violations.length === 0) {
+    lastViolationsCount = totalViolatingDraws;
+
+    if (violations.length === 0 || totalViolatingDraws === 0) {
       // Double check full 100% exhaustive verification across ALL combinations
       const finalReport = verifyTicketSet(
         numberFrom,
@@ -514,12 +517,12 @@ export async function optimizeWithConstraintGeneration(
       maxRounds,
       currentTickets: currentTickets.length,
       currentTicketList: currentTickets,
-      violationsCount: violations.length,
+      violationsCount: lastViolationsCount,
       deficit: deepestDeficit,
       activeConstraints: activeResults.length,
       totalCombinations: allResults.length,
       stepName: 'Separation Oracle',
-      status: `Round ${round}: Added ${newlyAdded} cuts (${currentTickets.length} tickets found so far)...`,
+      status: `Round ${round}: Added ${newlyAdded} cuts (${lastViolationsCount.toLocaleString()} draws remaining)...`,
       engine: usedEngine,
     });
 

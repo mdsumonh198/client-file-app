@@ -151,6 +151,11 @@ export function verifyTicketSet(
   };
 }
 
+export interface ViolationsScanResult {
+  cuts: Violation[];
+  totalViolatingDraws: number;
+}
+
 /**
  * Separation Oracle: Evaluates ticket set against 100% of combinations.
  * Identifies constraint violations and ranks them by deepest cut (largest deficit).
@@ -163,13 +168,17 @@ export function findViolatingResults(
   targets: TargetMap,
   maxViolationsToReturn = 75,
   excludeIndices?: Set<number>
-): Violation[] {
+): ViolationsScanResult {
   const targetEntries = Object.entries(targets).map(([k, min]) => ({
     k: Number(k),
     req: min,
   }));
 
-  if (targetEntries.length === 0 || tickets.length === 0) return [];
+  const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
+
+  if (targetEntries.length === 0 || tickets.length === 0) {
+    return { cuts: [], totalViolatingDraws: results.length };
+  }
 
   // Flatten ticket masks into typed arrays for maximum V8 JIT throughput
   const tCount = tickets.length;
@@ -181,13 +190,13 @@ export function findViolatingResults(
     tHi[i] = m.hi;
   }
 
-  const results = allCombinationsWithMasks(numberFrom, numberTo, resultSize);
   const countsPerK = new Int32Array(resultSize + 1);
 
   // Deficit buckets: index = deficit value (e.g. 1, 2, 3...)
   // Store up to 120 candidate result indices per bucket to completely eliminate sorting 300k items
   const deficitBuckets: number[][] = [];
   let maxDeficitSeen = 0;
+  let totalViolatingDraws = 0;
 
   for (let rIdx = 0; rIdx < results.length; rIdx++) {
     if (excludeIndices && excludeIndices.has(rIdx)) {
@@ -215,6 +224,7 @@ export function findViolatingResults(
     }
 
     if (totalDeficit > 0) {
+      totalViolatingDraws++;
       if (totalDeficit > maxDeficitSeen) {
         maxDeficitSeen = totalDeficit;
       }
@@ -228,8 +238,8 @@ export function findViolatingResults(
     }
   }
 
-  if (maxDeficitSeen === 0) {
-    return [];
+  if (maxDeficitSeen === 0 || totalViolatingDraws === 0) {
+    return { cuts: [], totalViolatingDraws: 0 };
   }
 
   // Gather candidate indices from highest deficit down to lowest
@@ -302,5 +312,5 @@ export function findViolatingResults(
     }
   }
 
-  return selectedCuts;
+  return { cuts: selectedCuts, totalViolatingDraws };
 }
