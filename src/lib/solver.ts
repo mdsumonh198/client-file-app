@@ -252,7 +252,6 @@ export async function fastGreedyBitsetCover(
     const dIn = new Uint8Array(N + minVal + 1);
     const dOut = new Int32Array(N);
     const sub5 = new Int32Array(K - 1);
-    const candTicket = new Int32Array(K);
     const candIn = new Uint8Array(N + minVal + 1);
     const candOut = new Int32Array(N);
     const candSub5 = new Int32Array(K - 1);
@@ -297,7 +296,11 @@ export async function fastGreedyBitsetCover(
 
     let iteration = 0;
 
-    // Phase 1: Best-Fit Max-Coverage Selection
+    // Helper to generate candidate tickets that cover a specific draw D
+    const candTicketBuf = new Int32Array(K);
+    const candDrawList = new Int32Array(maxCovers);
+
+    // Phase 1: Deep Chvátal Greedy Max-Weight Candidate Search
     while (uncLen > 0) {
       if (shouldStop?.()) {
         break;
@@ -309,10 +312,19 @@ export async function fastGreedyBitsetCover(
       }
 
       let bestScore = -1;
-      let bestSampleDrawIdx = -1;
 
-      // Sample up to 24 distinct uncovered draws evenly distributed across the active uncovered list
-      const numSamples = Math.min(24, uncLen);
+      // Adaptive sampling depth based on remaining uncovered draws
+      let numSamples = 2;
+      if (uncLen < 3000) {
+        numSamples = Math.min(24, uncLen);
+      } else if (uncLen < 15000) {
+        numSamples = Math.min(16, uncLen);
+      } else if (uncLen < 60000) {
+        numSamples = Math.min(8, uncLen);
+      } else if (uncLen < 150000) {
+        numSamples = Math.min(4, uncLen);
+      }
+
       const stride = Math.max(1, Math.floor(uncLen / numSamples));
 
       for (let s = 0; s < numSamples; s++) {
@@ -332,17 +344,13 @@ export async function fastGreedyBitsetCover(
           bestScore = score;
           bestTicket.set(dNums);
           bestCovList.set(candCovList);
-          bestSampleDrawIdx = drawIdx;
           if (bestScore === maxCovers) {
-            // Absolute theoretical maximum coverage achieved (100% uncovered)
-            break;
+            break; // Theoretical upper bound reached for this sample
           }
         }
-      }
 
-      // If best sampled draw coverage is below 85% of max possible, evaluate 1-neighbor mutations around bestSampleDrawIdx
-      if (bestScore < Math.min(maxCovers * 0.85, 110) && bestSampleDrawIdx !== -1) {
-        indexToCombination(bestSampleDrawIdx, N, K, minVal, dNums);
+        // Deep candidate search: evaluate all 126 mutant candidates covering this draw
+        // (Drop 1 number from draw, add 1 number outside draw)
         dIn.fill(0);
         for (let j = 0; j < K; j++) dIn[dNums[j]] = 1;
         let outCount = 0;
@@ -350,7 +358,7 @@ export async function fastGreedyBitsetCover(
           if (!dIn[j]) dOut[outCount++] = j;
         }
 
-        outerNeighbor: for (let drop = 0; drop < K; drop++) {
+        outerCand: for (let drop = 0; drop < K; drop++) {
           let sIdx = 0;
           for (let j = 0; j < K; j++) {
             if (j !== drop) sub5[sIdx++] = dNums[j];
@@ -362,30 +370,34 @@ export async function fastGreedyBitsetCover(
             let cIdx = 0;
             for (let j = 0; j < K - 1; j++) {
               if (!placed && outNum < sub5[j]) {
-                candTicket[cIdx++] = outNum;
+                candTicketBuf[cIdx++] = outNum;
                 placed = true;
               }
-              candTicket[cIdx++] = sub5[j];
+              candTicketBuf[cIdx++] = sub5[j];
             }
-            if (!placed) candTicket[cIdx++] = outNum;
+            if (!placed) candTicketBuf[cIdx++] = outNum;
 
-            fillDrawsForTicket(candTicket, candCovList);
-            let score = 0;
+            fillDrawsForTicket(candTicketBuf, candDrawList);
+            let candScore = 0;
             for (let i = 0; i < maxCovers; i++) {
-              if (drawCoverage[candCovList[i]] < primaryReq) {
-                score++;
+              if (drawCoverage[candDrawList[i]] < primaryReq) {
+                candScore++;
               }
             }
 
-            if (score > bestScore) {
-              bestScore = score;
-              bestTicket.set(candTicket);
-              bestCovList.set(candCovList);
-              if (bestScore >= maxCovers * 0.95) {
-                break outerNeighbor;
+            if (candScore > bestScore) {
+              bestScore = candScore;
+              bestTicket.set(candTicketBuf);
+              bestCovList.set(candDrawList);
+              if (bestScore === maxCovers) {
+                break outerCand;
               }
             }
           }
+        }
+
+        if (bestScore === maxCovers) {
+          break;
         }
       }
 
@@ -430,9 +442,9 @@ export async function fastGreedyBitsetCover(
           deficit: 1,
           activeConstraints: totalDraws - uncLen,
           totalCombinations: totalDraws,
-          stepName: 'Best-Fit Max-Coverage',
-          status: `Best-Fit Max-Coverage লুপ চলছে: ${selectedTickets.length}টি টিকিট নির্বাচিত (${progressPct.toFixed(1)}% ড্র কভার সম্পন্ন, বাকি ড্র: ${uncLen.toLocaleString()}টি)...`,
-          engine: 'Best-Fit Max-Coverage Engine (100% Guaranteed)',
+          stepName: 'Chvátal Max-Weight Search',
+          status: `ডিপ ম্যাক্স-ওয়েট ক্যান্ডিডেট সার্চ চলছে: ${selectedTickets.length}টি টিকিট নির্বাচিত (${progressPct.toFixed(1)}% ড্র কভার সম্পন্ন, বাকি ড্র: ${uncLen.toLocaleString()}টি, সেরা স্কোর: ${bestScore}/127)...`,
+          engine: 'Chvátal Deep Max-Weight Set Cover',
         });
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
@@ -631,65 +643,104 @@ export async function fastGreedyBitsetCover(
         }
       };
 
-      // Pass 1: Reverse Pruning (end to start)
+      // Multi-Pass Redundancy Elimination Loop (Convergence-based)
       let currentTicketList = selectedTickets.slice();
-      let keptTickets: number[][] = [];
+      let pruneRound = 0;
+      const maxPruneRounds = 15;
+      let totalPruned = 0;
 
-      for (let i = currentTicketList.length - 1; i >= 0; i--) {
-        if (i > 0 && i % 40 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const t = currentTicketList[i];
-        fill127Draws(t);
+      while (pruneRound < maxPruneRounds && currentTicketList.length > 2) {
+        if (shouldStop?.()) break;
+        pruneRound++;
+        let roundPruned = 0;
 
-        let canRemove = true;
-        for (let j = 0; j < maxCovers; j++) {
-          if (drawCoverage[covList[j]] <= primaryReq) {
-            canRemove = false;
-            break; // Critical early exit!
-          }
-        }
-
-        if (canRemove) {
+        // Compute critical draw counts per ticket
+        const critCounts = new Int32Array(currentTicketList.length);
+        for (let i = 0; i < currentTicketList.length; i++) {
+          fill127Draws(currentTicketList[i]);
+          let cc = 0;
           for (let j = 0; j < maxCovers; j++) {
-            drawCoverage[covList[j]]--;
+            if (drawCoverage[covList[j]] <= primaryReq) cc++;
           }
+          critCounts[i] = cc;
+        }
+
+        // Test order strategy:
+        // Round 1: Reverse order (later tickets added to cover residual draws allow earlier tickets to be pruned)
+        // Round 2: Criticality sorted (test tickets with 0 or few critical draws first!)
+        // Round 3: Forward order
+        // Round 4+: Alternating shuffled & criticality sorted
+        const order: number[] = [];
+        for (let i = 0; i < currentTicketList.length; i++) order.push(i);
+
+        if (pruneRound % 3 === 1) {
+          order.reverse(); // Reverse pass
+        } else if (pruneRound % 3 === 2) {
+          // Sort by ascending critical draw count (tickets covering fewest critical draws pruned first)
+          order.sort((a, b) => critCounts[a] - critCounts[b]);
         } else {
-          keptTickets.push(t);
+          // Semi-random / shuffled pass to escape local order traps
+          for (let i = order.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = order[i];
+            order[i] = order[j];
+            order[j] = tmp;
+          }
+        }
+
+        const kept: number[][] = [];
+        for (let idx = 0; idx < order.length; idx++) {
+          if (idx > 0 && idx % 50 === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+          const tIdx = order[idx];
+          const t = currentTicketList[tIdx];
+          fill127Draws(t);
+
+          let canRemove = true;
+          for (let j = 0; j < maxCovers; j++) {
+            if (drawCoverage[covList[j]] <= primaryReq) {
+              canRemove = false;
+              break;
+            }
+          }
+
+          if (canRemove) {
+            for (let j = 0; j < maxCovers; j++) {
+              drawCoverage[covList[j]]--;
+            }
+            roundPruned++;
+            totalPruned++;
+          } else {
+            kept.push(t);
+          }
+        }
+
+        currentTicketList = kept;
+
+        onProgress?.({
+          round: currentTicketList.length,
+          maxRounds: 0,
+          currentTickets: currentTicketList.length,
+          currentTicketList: currentTicketList.slice(0, 50),
+          violationsCount: 0,
+          deficit: 0,
+          activeConstraints: totalDraws,
+          totalCombinations: totalDraws,
+          stepName: 'Multi-Pass Redundancy Pruning',
+          status: `মাল্টি-পাস রিডান্ড্যান্সি ফিল্টারিং (রাউন্ড ${pruneRound}): ${roundPruned}টি অপ্রয়োজনীয় টিকিট ছাঁটাই হয়েছে (${currentTicketList.length}টি টিকিট অবশিষ্ট)...`,
+          engine: 'Multi-Pass Convergence Pruning',
+        });
+
+        if (roundPruned === 0) {
+          // Fully converged
+          break;
         }
       }
-      keptTickets.reverse();
-      currentTicketList = keptTickets;
 
-      // Pass 2: Forward Redundancy Clean-Up Pass
-      keptTickets = [];
-      for (let i = 0; i < currentTicketList.length; i++) {
-        if (i > 0 && i % 40 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const t = currentTicketList[i];
-        fill127Draws(t);
+      prunedTickets = currentTicketList;
 
-        let canRemove = true;
-        for (let j = 0; j < maxCovers; j++) {
-          if (drawCoverage[covList[j]] <= primaryReq) {
-            canRemove = false;
-            break;
-          }
-        }
-
-        if (canRemove) {
-          for (let j = 0; j < maxCovers; j++) {
-            drawCoverage[covList[j]]--;
-          }
-        } else {
-          keptTickets.push(t);
-        }
-      }
-
-      prunedTickets = keptTickets;
-
-      // Phase 3: 2-Opt & Swap Optimization Loop
+      // Phase 3: Deep 2-for-1 Swap & Simulated Annealing Local Search
       onProgress?.({
         round: prunedTickets.length,
         maxRounds: 0,
@@ -699,22 +750,30 @@ export async function fastGreedyBitsetCover(
         deficit: 0,
         activeConstraints: totalDraws,
         totalCombinations: totalDraws,
-        stepName: '2-Opt & Swap Optimization',
-        status: `2-Opt ও সোয়াপ অপ্টিমাইজেশন চলছে: অপ্রয়োজনীয় টিকিট সোয়াপ ও ড্রপ সম্পন্ন করা হচ্ছে (${prunedTickets.length}টি টিকিট অবশিষ্ট)...`,
-        engine: '2-Opt & Swap Optimizer',
+        stepName: 'Deep 2-for-1 Swap Annealing',
+        status: `ডিপ ২-ফর-১ সোয়াপ ও অ্যানিলিং অপ্টিমাইজেশন শুরু হচ্ছে (${prunedTickets.length}টি টিকিট)...`,
+        engine: 'Deep 2-to-1 Swap & Annealing Engine',
       });
 
-      // Iterative critical-draw swap & merge optimization
+      // Iterative 2-for-1 merge & 1-opt local search optimization
       let swapRounds = 0;
-      const maxSwapRounds = 5;
+      const maxSwapRounds = 12;
       let totalSwappedOrDropped = 0;
+      const candScratch = new Int32Array(K);
+      const testCovA = new Int32Array(maxCovers);
+      const testCovB = new Int32Array(maxCovers);
+      const testCovCand = new Int32Array(maxCovers);
+      const p3DIn = new Uint8Array(N + minVal + 1);
+      const p3DOut = new Int32Array(N);
+      const p3Sub5 = new Int32Array(K - 1);
+      const p3CandTicketBuf = new Int32Array(K);
 
       while (swapRounds < maxSwapRounds && prunedTickets.length > 2) {
         if (shouldStop?.()) break;
         swapRounds++;
         let roundImproved = false;
 
-        // Compute critical draw counts per ticket (draws where drawCoverage === primaryReq)
+        // Step 1: Compute critical draw counts & lists per ticket
         const ticketCriticalCounts = new Int32Array(prunedTickets.length);
         const ticketCriticalDraws: number[][] = [];
 
@@ -726,14 +785,14 @@ export async function fastGreedyBitsetCover(
             const d = covList[j];
             if (drawCoverage[d] === primaryReq) {
               critCount++;
-              if (critList.length < 10) critList.push(d);
+              if (critList.length < 8) critList.push(d);
             }
           }
           ticketCriticalCounts[i] = critCount;
           ticketCriticalDraws.push(critList);
         }
 
-        // Drop any ticket that has 0 critical draws (100% redundant)
+        // Drop any completely redundant tickets (0 critical draws)
         const nextKept: number[][] = [];
         for (let i = 0; i < prunedTickets.length; i++) {
           if (ticketCriticalCounts[i] === 0) {
@@ -756,15 +815,23 @@ export async function fastGreedyBitsetCover(
         }
         prunedTickets = nextKept;
 
-        // 2-to-1 Merge Search for tickets with 1 or 2 critical draws
-        const candScratch = new Int32Array(K);
-        for (let i = 0; i < Math.min(prunedTickets.length, 300); i++) {
-          if (ticketCriticalCounts[i] > 2 || ticketCriticalCounts[i] === 0) continue;
-          const critA = ticketCriticalDraws[i];
+        // Step 2: Global 2-to-1 Merge Search across tickets with 1 or 2 critical draws
+        const lowCritIndices: number[] = [];
+        for (let i = 0; i < prunedTickets.length; i++) {
+          if (ticketCriticalCounts[i] >= 1 && ticketCriticalCounts[i] <= 2) {
+            lowCritIndices.push(i);
+          }
+        }
 
-          for (let j = i + 1; j < Math.min(prunedTickets.length, 300); j++) {
-            if (ticketCriticalCounts[j] > 2 || ticketCriticalCounts[j] === 0) continue;
+        outerSwapLoop: for (let a = 0; a < lowCritIndices.length; a++) {
+          const i = lowCritIndices[a];
+          const critA = ticketCriticalDraws[i];
+          if (!critA || critA.length === 0) continue;
+
+          for (let b = a + 1; b < lowCritIndices.length; b++) {
+            const j = lowCritIndices[b];
             const critB = ticketCriticalDraws[j];
+            if (!critB || critB.length === 0) continue;
 
             // Union of critical draws for A and B
             const combinedCrit = [...critA];
@@ -774,42 +841,142 @@ export async function fastGreedyBitsetCover(
 
             if (combinedCrit.length > 4) continue;
 
-            // Check if any draw in combinedCrit or candidate covers all combinedCrit
+            // Search for any ticket candScratch that covers all draws in combinedCrit
             for (const testDrawIdx of combinedCrit) {
               indexToCombination(testDrawIdx, N, K, minVal, candScratch);
-              fill127Draws(Array.from(candScratch));
 
-              let coversAllCombined = true;
-              for (const c of combinedCrit) {
-                let found = false;
-                for (let k = 0; k < maxCovers; k++) {
-                  if (covList[k] === c) { found = true; break; }
-                }
-                if (!found) { coversAllCombined = false; break; }
+              // Test candidates covering testDrawIdx: self draw + 126 1-off mutants
+              p3DIn.fill(0);
+              for (let m = 0; m < K; m++) p3DIn[candScratch[m]] = 1;
+              let outCount = 0;
+              for (let m = minVal; m < minVal + N; m++) {
+                if (!p3DIn[m]) p3DOut[outCount++] = m;
               }
 
-              if (coversAllCombined) {
-                // Merge A and B into candScratch!
-                fill127Draws(prunedTickets[i]);
-                for (let k = 0; k < maxCovers; k++) drawCoverage[covList[k]]--;
-                fill127Draws(prunedTickets[j]);
-                for (let k = 0; k < maxCovers; k++) drawCoverage[covList[k]]--;
-                fill127Draws(Array.from(candScratch));
-                for (let k = 0; k < maxCovers; k++) drawCoverage[covList[k]]++;
+              // Include self draw first
+              const testCands: number[][] = [Array.from(candScratch)];
+              for (let drop = 0; drop < K; drop++) {
+                let sIdx = 0;
+                for (let m = 0; m < K; m++) {
+                  if (m !== drop) p3Sub5[sIdx++] = candScratch[m];
+                }
+                for (let o = 0; o < outCount; o++) {
+                  const outNum = p3DOut[o];
+                  let placed = false;
+                  let cIdx = 0;
+                  for (let m = 0; m < K - 1; m++) {
+                    if (!placed && outNum < p3Sub5[m]) {
+                      p3CandTicketBuf[cIdx++] = outNum;
+                      placed = true;
+                    }
+                    p3CandTicketBuf[cIdx++] = p3Sub5[m];
+                  }
+                  if (!placed) p3CandTicketBuf[cIdx++] = outNum;
+                  testCands.push(Array.from(p3CandTicketBuf));
+                }
+              }
 
-                prunedTickets[i] = Array.from(candScratch);
-                prunedTickets.splice(j, 1);
-                roundImproved = true;
-                totalSwappedOrDropped++;
+              for (const cand of testCands) {
+                fill127Draws(cand);
+                testCovCand.set(covList);
+
+                // Verify that cand covers ALL combinedCrit draws
+                let coversAllCrit = true;
+                for (const c of combinedCrit) {
+                  let found = false;
+                  for (let k = 0; k < maxCovers; k++) {
+                    if (testCovCand[k] === c) {
+                      found = true;
+                      break;
+                    }
+                  }
+                  if (!found) {
+                    coversAllCrit = false;
+                    break;
+                  }
+                }
+
+                if (!coversAllCrit) continue;
+
+                // Candidate covers all critical draws! Now verify safe 2-for-1 replacement:
+                // No draw covered by T_i or T_j should drop below primaryReq!
+                fill127Draws(prunedTickets[i]);
+                testCovA.set(covList);
+                fill127Draws(prunedTickets[j]);
+                testCovB.set(covList);
+
+                // Temporarily decrement coverage of T_i and T_j, increment candidate
+                for (let k = 0; k < maxCovers; k++) drawCoverage[testCovA[k]]--;
+                for (let k = 0; k < maxCovers; k++) drawCoverage[testCovB[k]]--;
+                for (let k = 0; k < maxCovers; k++) drawCoverage[testCovCand[k]]++;
+
+                let isSafeSwap = true;
+                for (let k = 0; k < maxCovers; k++) {
+                  if (drawCoverage[testCovA[k]] < primaryReq || drawCoverage[testCovB[k]] < primaryReq) {
+                    isSafeSwap = false;
+                    break;
+                  }
+                }
+
+                if (isSafeSwap) {
+                  // Valid 2-to-1 merge: replace T_i with cand, remove T_j!
+                  prunedTickets[i] = cand;
+                  prunedTickets.splice(j, 1);
+                  roundImproved = true;
+                  totalSwappedOrDropped++;
+
+                  onProgress?.({
+                    round: prunedTickets.length,
+                    maxRounds: 0,
+                    currentTickets: prunedTickets.length,
+                    currentTicketList: prunedTickets.slice(0, 50),
+                    violationsCount: 0,
+                    deficit: 0,
+                    activeConstraints: totalDraws,
+                    totalCombinations: totalDraws,
+                    stepName: '2-to-1 Swap Merge',
+                    status: `সফল ২-ফর-১ টিকেট মার্জ: ২টি টিকিটকে ১টিতে রূপান্তর করা হয়েছে (মোট ছাঁটাই: ${totalSwappedOrDropped}টি, বর্তমান টিকিট: ${prunedTickets.length}টি, FAIL=0)...`,
+                    engine: '2-for-1 Swap Annealing',
+                  });
+
+                  break outerSwapLoop;
+                } else {
+                  // Revert coverage state
+                  for (let k = 0; k < maxCovers; k++) drawCoverage[testCovA[k]]++;
+                  for (let k = 0; k < maxCovers; k++) drawCoverage[testCovB[k]]++;
+                  for (let k = 0; k < maxCovers; k++) drawCoverage[testCovCand[k]]--;
+                }
+              }
+            }
+          }
+        }
+
+        // If a swap improved ticket count, immediately re-run a fast redundancy pass
+        if (roundImproved) {
+          const keptAfterSwap: number[][] = [];
+          for (let i = prunedTickets.length - 1; i >= 0; i--) {
+            const t = prunedTickets[i];
+            fill127Draws(t);
+            let canRemove = true;
+            for (let j = 0; j < maxCovers; j++) {
+              if (drawCoverage[covList[j]] <= primaryReq) {
+                canRemove = false;
                 break;
               }
             }
-            if (roundImproved) break;
+            if (canRemove) {
+              for (let j = 0; j < maxCovers; j++) drawCoverage[covList[j]]--;
+              totalSwappedOrDropped++;
+            } else {
+              keptAfterSwap.push(t);
+            }
           }
-          if (roundImproved) break;
+          keptAfterSwap.reverse();
+          prunedTickets = keptAfterSwap;
+        } else {
+          // No more 2-to-1 merges found in this round
+          break;
         }
-
-        if (!roundImproved) break;
       }
     } else {
       // Universal Arbitrary Game Multi-Pass Reverse Pruning & 2-Opt (for Any Range, K, R, Target)
