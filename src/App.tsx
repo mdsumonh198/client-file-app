@@ -206,14 +206,14 @@ export const App: React.FC = () => {
         id: 'init_1',
         timestamp: nowTimeStr,
         message: currentEngine === 'server'
-          ? `⚡ System connected to Server Multi-Core CPU Engine (${serverHardware?.cpuCores || '2'} Cores / 4GB RAM)`
+          ? `⚡ System connected to HiGHS Mixed-Integer Linear Programming (MILP) Server Engine (${serverHardware?.cpuCores || '2'} vCPU / 4GB RAM) - Pure Set Covering MIP`
           : '⚡ System initialized Browser Worker (High-Speed WASM + Bitset)',
         color: 'text-cyan-400 font-bold',
       },
       {
         id: 'init_2',
         timestamp: nowTimeStr,
-        message: `📐 Problem Matrix: Universe [${config.numberFrom}..${config.numberTo}], Ticket Size ${config.ticketSize}, Draw Size ${config.resultSize} (${currentCombos.toLocaleString()} total draws to cover)`,
+        message: `📐 Pure Set Covering Matrix: Universe [${config.numberFrom}..${config.numberTo}], Ticket Size ${config.ticketSize}, Draw Size ${config.resultSize} (${currentCombos.toLocaleString()} total constraints: sum(x_j) >= 1)`,
         color: 'text-indigo-300',
       },
       {
@@ -225,7 +225,7 @@ export const App: React.FC = () => {
       {
         id: 'init_4',
         timestamp: nowTimeStr,
-        message: `🚀 Best-Fit Max-Coverage ও 2-Opt সোয়াপ অপ্টিমাইজেশন শুরু হচ্ছে: ন্যূনতম খরচে (Lowest Possible Tickets) ১০০% জিরো-মিস গ্যারান্টি...`,
+        message: `🚀 HiGHS Branch-and-Cut ও Simplex সলভার সক্রিয়: অবজেক্টিভ Min sum(x_j), সর্বনিম্ন টিকেটে ১০০% জিরো-মিস গ্যারান্টি (FAIL = 0)...`,
         color: 'text-emerald-400 font-bold',
       },
     ]);
@@ -403,7 +403,7 @@ export const App: React.FC = () => {
                   className="bg-slate-950 border border-cyan-500/40 text-xs text-cyan-300 font-bold rounded px-2.5 py-1 font-mono cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500"
                 >
                   <option value="server">
-                    🚀 VPS / Server Turbo ({serverHardware ? `${serverHardware.cpuCores} Core CPU / ${serverHardware.totalMemoryGB}GB RAM` : 'Cloud CPU'})
+                    🚀 HiGHS MILP Server ({serverHardware ? `${serverHardware.cpuCores} vCPU / ${serverHardware.totalMemoryGB}GB RAM` : 'VPS Linux CPU'})
                   </option>
                   <option value="browser">💻 Web / Browser Worker (Local)</option>
                 </select>

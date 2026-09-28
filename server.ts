@@ -3,7 +3,7 @@ import cors from 'cors';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { runOptimization } from './src/lib/solver';
+import { solveWithHighsMilp } from './src/lib/highsSolver';
 import { GameConfig, TargetMap, OptimizationResult } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -58,20 +58,27 @@ function startOptimizationTask(
     }
   };
 
-  // Launch optimization in background
-  runOptimization(config, targets, {
-    timeLimitSeconds: options?.timeLimitSeconds,
-    maxRounds: options?.maxRounds ?? 0,
-    shouldStop: () => stopRequested,
-    onProgress: (info) => {
-      session.lastProgress = {
-        ...info,
-        currentTicketList: info.currentTicketList ? info.currentTicketList.slice(0, 50) : undefined,
-      };
-      session.updatedAt = Date.now();
-      emit('progress', info);
-    },
-  })
+  // Launch HiGHS Mixed-Integer LP (MILP) optimization in background
+  solveWithHighsMilp(
+    config.numberFrom,
+    config.numberTo,
+    config.ticketSize,
+    config.resultSize,
+    targets,
+    {
+      timeLimitSeconds: options?.timeLimitSeconds,
+      maxRounds: options?.maxRounds ?? 0,
+      shouldStop: () => stopRequested,
+      onProgress: (info) => {
+        session.lastProgress = {
+          ...info,
+          currentTicketList: info.currentTicketList ? info.currentTicketList.slice(0, 50) : undefined,
+        };
+        session.updatedAt = Date.now();
+        emit('progress', info);
+      },
+    }
+  )
     .then((result) => {
       session.status = 'completed';
       session.result = result;
