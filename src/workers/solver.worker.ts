@@ -1,5 +1,5 @@
-import { optimizeWithConstraintGeneration, SolverProgressInfo } from '../lib/solver';
-import { TargetMap } from '../types';
+import { universalOptimize } from '../lib/universalOptimizer';
+import { TargetMap, SolverProgressInfo } from '../types';
 
 let isStopRequested = false;
 
@@ -20,7 +20,6 @@ self.onmessage = async (e: MessageEvent) => {
       resultSize,
       targets,
       timeLimitSeconds,
-      seedConstraintCount,
       maxRounds,
     } = payload as {
       numberFrom: number;
@@ -29,12 +28,11 @@ self.onmessage = async (e: MessageEvent) => {
       resultSize: number;
       targets: TargetMap;
       timeLimitSeconds?: number;
-      seedConstraintCount?: number;
       maxRounds?: number;
     };
 
     try {
-      const result = await optimizeWithConstraintGeneration(
+      const result = await universalOptimize(
         numberFrom,
         numberTo,
         ticketSize,
@@ -42,7 +40,6 @@ self.onmessage = async (e: MessageEvent) => {
         targets,
         {
           timeLimitSeconds,
-          seedConstraintCount,
           maxRounds,
           shouldStop: () => isStopRequested,
           onProgress: (info: SolverProgressInfo) => {

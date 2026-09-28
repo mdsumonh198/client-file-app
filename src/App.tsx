@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GameConfig, TargetMap, OptimizationResult } from './types';
+import { GameConfig, TargetMap, OptimizationResult, SolverProgressInfo } from './types';
 import { PRESETS } from './lib/presets';
 import { combinationCountBigInt } from './lib/core';
 import { GameConfigForm } from './components/GameConfigForm';
@@ -7,7 +7,6 @@ import { TargetsMatrix } from './components/TargetsMatrix';
 import { TicketsView } from './components/TicketsView';
 import { VerificationReportView } from './components/VerificationReportView';
 import { ResultSimulator } from './components/ResultSimulator';
-import { SolverProgressInfo } from './lib/solver';
 import { runOptimizationWithWorker } from './lib/workerClient';
 import {
   fetchSystemInfo,

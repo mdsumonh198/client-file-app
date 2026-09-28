@@ -7,6 +7,20 @@ export interface GameConfig {
 
 export type TargetMap = Record<number, number>; // exact k -> minimum count
 
+export interface SolverProgressInfo {
+  round: number;
+  maxRounds: number;
+  currentTickets: number;
+  currentTicketList?: number[][];
+  violationsCount: number;
+  deficit?: number;
+  activeConstraints: number;
+  totalCombinations: number;
+  stepName: string;
+  status: string;
+  engine?: string;
+}
+
 export type SolverStatus =
   | 'PROVED OPTIMAL'
   | 'BEST FOUND'

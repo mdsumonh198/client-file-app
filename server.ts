@@ -3,7 +3,7 @@ import cors from 'cors';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { solveWithHighsMilp } from './src/lib/highsSolver';
+import { universalOptimize } from './src/lib/universalOptimizer';
 import { GameConfig, TargetMap, OptimizationResult } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -58,8 +58,8 @@ function startOptimizationTask(
     }
   };
 
-  // Launch HiGHS Mixed-Integer LP (MILP) optimization in background
-  solveWithHighsMilp(
+  // Launch Universal Dual-Column LP & Large-Block Optimization in background
+  universalOptimize(
     config.numberFrom,
     config.numberTo,
     config.ticketSize,
